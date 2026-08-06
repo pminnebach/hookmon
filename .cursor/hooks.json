@@ -1,0 +1,110 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "/workspace/hookmon send --agent cursor"
+      }
+    ],
+    "sessionEnd": [
+      {
+        "command": "/workspace/hookmon send --agent cursor"
+      }
+    ],
+    "preToolUse": [
+      {
+        "command": "/workspace/hookmon send --agent cursor"
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": "/workspace/hookmon send --agent cursor"
+      }
+    ],
+    "postToolUseFailure": [
+      {
+        "command": "/workspace/hookmon send --agent cursor"
+      }
+    ],
+    "subagentStart": [
+      {
+        "command": "/workspace/hookmon send --agent cursor"
+      }
+    ],
+    "subagentStop": [
+      {
+        "command": "/workspace/hookmon send --agent cursor"
+      }
+    ],
+    "beforeShellExecution": [
+      {
+        "command": "/workspace/hookmon send --agent cursor"
+      }
+    ],
+    "afterShellExecution": [
+      {
+        "command": "/workspace/hookmon send --agent cursor"
+      }
+    ],
+    "beforeMCPExecution": [
+      {
+        "command": "/workspace/hookmon send --agent cursor"
+      }
+    ],
+    "afterMCPExecution": [
+      {
+        "command": "/workspace/hookmon send --agent cursor"
+      }
+    ],
+    "beforeReadFile": [
+      {
+        "command": "/workspace/hookmon send --agent cursor"
+      }
+    ],
+    "afterFileEdit": [
+      {
+        "command": "/workspace/hookmon send --agent cursor"
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "command": "/workspace/hookmon send --agent cursor"
+      }
+    ],
+    "preCompact": [
+      {
+        "command": "/workspace/hookmon send --agent cursor"
+      }
+    ],
+    "stop": [
+      {
+        "command": "/workspace/hookmon send --agent cursor"
+      }
+    ],
+    "afterAgentResponse": [
+      {
+        "command": "/workspace/hookmon send --agent cursor"
+      }
+    ],
+    "afterAgentThought": [
+      {
+        "command": "/workspace/hookmon send --agent cursor"
+      }
+    ],
+    "beforeTabFileRead": [
+      {
+        "command": "/workspace/hookmon send --agent cursor"
+      }
+    ],
+    "afterTabFileEdit": [
+      {
+        "command": "/workspace/hookmon send --agent cursor"
+      }
+    ],
+    "workspaceOpen": [
+      {
+        "command": "/workspace/hookmon send --agent cursor"
+      }
+    ]
+  }
+}
