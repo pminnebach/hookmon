@@ -1,0 +1,24 @@
+# Built binary
+/hookmon
+
+# Temporary / scratch
+tmp
+tmp/
+*.tmp
+*.temp
+
+# Log files (from --log-file)
+*.log
+
+# Go
+*.exe
+*.test
+*.out
+/coverage.out
+/coverage.html
+
+# OS / editor
+.DS_Store
+*~
+*.swp
+*.swo
