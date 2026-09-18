@@ -6,8 +6,21 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"time"
 )
+
+// syncWriter serializes concurrent writes to an underlying io.Writer.
+type syncWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *syncWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
+}
 
 // Listen accepts TCP connections on cfg.Addr and prints each envelope to out.
 func Listen(ctx context.Context, cfg Config, out io.Writer) error {
@@ -16,6 +29,8 @@ func Listen(ctx context.Context, cfg Config, out io.Writer) error {
 		return fmt.Errorf("listen %s: %w", cfg.Addr, err)
 	}
 	defer ln.Close()
+
+	out = &syncWriter{w: out}
 
 	fmt.Fprintf(out, "hookmon: listening on %s\n", ln.Addr().String())
 
