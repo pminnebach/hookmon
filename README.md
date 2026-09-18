@@ -96,6 +96,37 @@ also catches `"git push --force"` and `"git push origin main"`. A rule with
 `commands` set but no command in the event (e.g. a non-Bash tool) simply
 doesn't match — same fail-open rule as `paths`.
 
+Other commands worth considering for a `commands` rule in an agentic coding
+setup: `rm -rf` (destructive deletes), `git reset --hard` / `git clean -fd`
+(silently discards uncommitted work), `sudo` (privilege escalation), and
+`curl`/`wget` (especially piped into a shell — a remote-code-execution
+pattern). A rule's `commands` list can hold several patterns at once (any
+one matching is enough), and `action: ask` is worth using instead of `deny`
+for a lower-confidence match like bare `curl`/`wget`, where the command
+itself isn't inherently dangerous:
+
+```yaml
+- event: PreToolUse
+  agent: claudecode
+  tools: ["Bash"]
+  commands: ["rm -rf", "git reset --hard", "sudo"]
+  action: deny
+  reason: "This command is blocked by hookmon policy."
+
+- event: PreToolUse
+  agent: claudecode
+  tools: ["Bash"]
+  commands: ["curl", "wget"]
+  action: ask
+  reason: "Network downloads via Bash require confirmation."
+```
+
+As with `git push`, substring matching is blunt here — `"rm -rf"` also
+catches harmless cleanup like `"rm -rf ./build"`, and `"sudo"` also catches
+read-only uses like `"sudo apt list"`. See
+[examples/policy/.hookmon-policy.yaml](examples/policy/.hookmon-policy.yaml)
+for the full versions of these rules.
+
 **Fail-open by design**, matching every other error path in hookmon: a
 missing policy file, a policy file that fails to parse, or a hook/tool that
 matches no rule all behave exactly like no policy being configured at all —

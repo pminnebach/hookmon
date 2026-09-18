@@ -52,5 +52,29 @@ rules:
     action: deny
     reason: "git push is blocked by hookmon policy; pushing requires explicit user action outside the agent."
 
+  # More examples of commands worth blocking by default in an agentic
+  # coding setup — each is a plain substring match, so these are blunt:
+  # "rm -rf" also catches harmless cleanup like "rm -rf ./build", and
+  # "sudo" also catches read-only uses like "sudo apt list". Adjust to
+  # taste before relying on these. A single rule can list several
+  # `commands` patterns — any one of them matching is enough.
+  - event: PreToolUse
+    agent: claudecode
+    tools: ["Bash"]
+    commands: ["rm -rf", "git reset --hard", "git clean -fd", "sudo"]
+    action: deny
+    reason: "This command is blocked by hookmon policy; it can destroy work or escalate privileges."
+
+  # Blocks the "download a script and pipe it straight into a shell"
+  # pattern (remote code execution), e.g. "curl ... | sh" or
+  # "wget ... | bash". Uses `ask` instead of `deny` since a bare `curl`/
+  # `wget` isn't inherently dangerous — only piping it into a shell is.
+  - event: PreToolUse
+    agent: claudecode
+    tools: ["Bash"]
+    commands: ["curl", "wget"]
+    action: ask
+    reason: "Network downloads via Bash require confirmation; piping into a shell is especially risky."
+
 # Applies when no rule above matches. Defaults to "allow" if omitted.
 default-action: allow
