@@ -4,7 +4,7 @@ rules:
   # Block Claude Code from reading or writing .env files directly.
   - event: PreToolUse
     agent: claudecode
-    tools: ["Read", "Write"]
+    tools: ["Read", "Edit", "Write"]
     paths: [".env"]
     action: deny
     reason: ".env files are blocked by hookmon policy; secrets must not be read or edited by the agent."
@@ -12,7 +12,7 @@ rules:
   # Block Claude Code from reading or writing .env files directly.
   - event: PreToolUse
     agent: claudecode
-    tools: ["Write"]
+    tools: ["Write", "Edit"]
     paths: [".hookmon-policy.yaml"]
     action: deny
     reason: "Agents should not be able to modify the hookmon policy."
