@@ -175,6 +175,69 @@ rules:
 	}
 }
 
+// TestRootCmdPolicyDeniesPathMatch confirms a paths-scoped rule blocks a
+// tool call whose tool_input.file_path matches, end to end through
+// ParseEvent -> Resolve -> Acknowledge.
+func TestRootCmdPolicyDeniesPathMatch(t *testing.T) {
+	policyPath := filepath.Join(t.TempDir(), "policy.yaml")
+	policyYAML := `
+rules:
+  - event: PreToolUse
+    tools: ["Read", "Write"]
+    paths: [".env"]
+    action: deny
+    reason: "blocked by test policy"
+`
+	if err := os.WriteFile(policyPath, []byte(policyYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	root := cmd.NewRootCmd()
+	root.SetArgs([]string{"--agent", "claudecode", "--policy-file", policyPath})
+	root.SetIn(strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"/home/user/project/.env"}}`))
+
+	var stdout bytes.Buffer
+	root.SetOut(&stdout)
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"permissionDecision":"deny"`) {
+		t.Fatalf("stdout = %q, want a deny decision", stdout.String())
+	}
+}
+
+// TestRootCmdPolicyAllowsPathMismatch confirms the same rule doesn't fire
+// against an unrelated file, and doesn't false-positive on a filename that
+// merely contains ".env" as a substring.
+func TestRootCmdPolicyAllowsPathMismatch(t *testing.T) {
+	policyPath := filepath.Join(t.TempDir(), "policy.yaml")
+	policyYAML := `
+rules:
+  - event: PreToolUse
+    tools: ["Read", "Write"]
+    paths: [".env"]
+    action: deny
+`
+	if err := os.WriteFile(policyPath, []byte(policyYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	root := cmd.NewRootCmd()
+	root.SetArgs([]string{"--agent", "claudecode", "--policy-file", policyPath})
+	root.SetIn(strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"/home/user/project/foo.envelope.txt"}}`))
+
+	var stdout bytes.Buffer
+	root.SetOut(&stdout)
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if stdout.String() != "{}\n" {
+		t.Fatalf("stdout = %q, want %q", stdout.String(), "{}\n")
+	}
+}
+
 // TestRootCmdMalformedPolicyFailsOpen confirms a policy file that fails to
 // parse doesn't block anything — it's treated as if no policy existed.
 func TestRootCmdMalformedPolicyFailsOpen(t *testing.T) {

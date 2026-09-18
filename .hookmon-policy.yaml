@@ -1,0 +1,12 @@
+# hookmon's own dogfood policy (see README.md "Blocking tool calls with
+# policy" and examples/policy/.hookmon-policy.yaml for the full schema).
+rules:
+  # Block Claude Code from reading or writing .env files directly.
+  - event: PreToolUse
+    agent: claudecode
+    tools: ["Read", "Write"]
+    paths: [".env"]
+    action: deny
+    reason: ".env files are blocked by hookmon policy; secrets must not be read or edited by the agent."
+
+default-action: allow

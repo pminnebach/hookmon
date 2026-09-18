@@ -79,6 +79,89 @@ func TestResolveDefaultActionAppliesOnNoMatch(t *testing.T) {
 	}
 }
 
+func TestResolvePathAndToolBothMustMatch(t *testing.T) {
+	cfg := policy.Config{Rules: []policy.Rule{
+		{Event: "PreToolUse", Tools: []string{"Read"}, Paths: []string{".env"}, Action: "deny"},
+	}}
+
+	if d := policy.Resolve(cfg, policy.Event{Name: "PreToolUse", Tool: "Read", Path: ".env"}); d.Action != agent.Deny {
+		t.Fatalf("tool+path match: action = %v, want Deny", d.Action)
+	}
+	if d := policy.Resolve(cfg, policy.Event{Name: "PreToolUse", Tool: "Read", Path: "config.json"}); d.Action != agent.Allow {
+		t.Fatalf("path mismatch: action = %v, want Allow", d.Action)
+	}
+	if d := policy.Resolve(cfg, policy.Event{Name: "PreToolUse", Tool: "Write", Path: ".env"}); d.Action != agent.Allow {
+		t.Fatalf("tool mismatch: action = %v, want Allow", d.Action)
+	}
+}
+
+func TestResolvePathRuleWithNoToolsFilterMatchesAnyTool(t *testing.T) {
+	cfg := policy.Config{Rules: []policy.Rule{
+		{Event: "PreToolUse", Paths: []string{".env"}, Action: "deny"},
+	}}
+	d := policy.Resolve(cfg, policy.Event{Name: "PreToolUse", Tool: "AnyTool", Path: ".env"})
+	if d.Action != agent.Deny {
+		t.Fatalf("action = %v, want Deny", d.Action)
+	}
+}
+
+func TestResolvePathRuleFallsOpenWhenEventHasNoPath(t *testing.T) {
+	cfg := policy.Config{Rules: []policy.Rule{
+		{Event: "PreToolUse", Paths: []string{".env"}, Action: "deny"},
+	}}
+	d := policy.Resolve(cfg, policy.Event{Name: "PreToolUse", Tool: "Bash", Path: ""})
+	if d.Action != agent.Allow {
+		t.Fatalf("action = %v, want Allow (no path to evaluate against)", d.Action)
+	}
+}
+
+func TestPathMatchesLiteralBasename(t *testing.T) {
+	cases := []struct {
+		pattern string
+		path    string
+		want    bool
+	}{
+		{".env", "/home/user/project/.env", true},
+		{".env", "./.env", true},
+		{".env", "config/.env", true},
+		{".env", "/home/user/project/foo.envelope.txt", false},
+		{".env", ".environment", false},
+		{".env", "myenv.txt", false},
+		{"*.env", "config/prod.env", true},
+		{"*.env", "config/.envrc", false},
+		{".git/", "/home/user/project/.git/config", true},
+		{".git/", "/home/user/project/.git", false},
+		{".env", ".ENV", false},
+		{".env", `C:\project\.env`, true},
+		{".env", "", false},
+	}
+	for _, c := range cases {
+		cfg := policy.Config{Rules: []policy.Rule{
+			{Event: "PreToolUse", Paths: []string{c.pattern}, Action: "deny"},
+		}}
+		got := policy.Resolve(cfg, policy.Event{Name: "PreToolUse", Path: c.path}).Action == agent.Deny
+		if got != c.want {
+			t.Errorf("pattern %q vs path %q: matched = %v, want %v", c.pattern, c.path, got, c.want)
+		}
+	}
+}
+
+func TestParseEventExtractsClaudeCodeFilePath(t *testing.T) {
+	payload := []byte(`{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"/x/.env"}}`)
+	evt := policy.ParseEvent("claudecode", payload)
+	if evt.Path != "/x/.env" {
+		t.Fatalf("path = %q", evt.Path)
+	}
+}
+
+func TestParseEventNoFilePathYieldsEmptyPath(t *testing.T) {
+	payload := []byte(`{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls"}}`)
+	evt := policy.ParseEvent("claudecode", payload)
+	if evt.Path != "" {
+		t.Fatalf("path = %q, want empty", evt.Path)
+	}
+}
+
 func TestParseEventClaudeCodePayload(t *testing.T) {
 	payload := []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls"}}`)
 	evt := policy.ParseEvent("claudecode", payload)

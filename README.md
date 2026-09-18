@@ -50,9 +50,32 @@ Point hookmon at it with `--policy-file`, `HOOKMON_POLICY_FILE`, or
 `policy-file:` in `.hookmon.yaml` (default: `.hookmon-policy.yaml` in the
 current directory). Each rule matches a hook `event` name (agent-native
 casing, e.g. `PreToolUse` for Claude Code, `preToolUse` for Cursor),
-optionally scoped to one `agent` and one or more exact `tools`; `action` is
-`allow`, `deny`, or `ask`. When several rules match, the strictest wins
-(`deny` > `ask` > `allow`).
+optionally scoped to one `agent`, one or more exact `tools`, and/or one or
+more `paths`; `action` is `allow`, `deny`, or `ask`. When several rules
+match, the strictest wins (`deny` > `ask` > `allow`).
+
+`tools` and `paths` both AND with the rest of the rule (and with each other)
+— a rule needs every filter it specifies to match. `paths` scopes a rule to
+specific files, e.g. to block reads/writes of `.env` without blocking `Read`/
+`Write` outright:
+
+```yaml
+- event: PreToolUse
+  agent: claudecode
+  tools: ["Read", "Write"]
+  paths: [".env"]
+  action: deny
+  reason: ".env files are blocked by hookmon policy."
+```
+
+Path patterns are matched gitignore-style against `tool_input.file_path`
+(currently populated for Claude Code only): a bare pattern like `.env` or
+`*.env` matches the filename at any depth by comparing whole path
+components, never a substring — so `foo.envelope.txt` is correctly **not**
+caught by `.env`. A pattern ending in `/` (e.g. `.git/`) anchors to a
+directory component instead of the filename. A rule with `paths` set but no
+matching file path in the event (e.g. a `Bash` call, which has no
+`file_path`) simply doesn't match — same fail-open rule as everything else.
 
 **Fail-open by design**, matching every other error path in hookmon: a
 missing policy file, a policy file that fails to parse, or a hook/tool that

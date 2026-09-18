@@ -25,5 +25,20 @@ rules:
     action: deny
     reason: "Shell execution is blocked by hookmon policy."
 
+  # `paths` scopes a rule to specific files instead of blocking a tool
+  # outright: this only blocks Read/Write when the file path matches one of
+  # the patterns, gitignore-style (a bare pattern like ".env" matches at any
+  # depth, matched against whole path components — never a substring, so a
+  # file like "foo.envelope.txt" is NOT caught by ".env"). Cursor isn't
+  # covered here: it has no "Read"/"Write" tool names (its file hooks are
+  # events like beforeReadFile) and its provider has no blocking-capable
+  # write hook today.
+  - event: PreToolUse
+    agent: claudecode
+    tools: ["Read", "Write"]
+    paths: [".env"]
+    action: deny
+    reason: ".env files are blocked by hookmon policy; secrets must not be read or edited by the agent."
+
 # Applies when no rule above matches. Defaults to "allow" if omitted.
 default-action: allow

@@ -12,18 +12,24 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
+	"strings"
 
 	"go.yaml.in/yaml/v3"
 
 	"hookmon/agent"
 )
 
-// Rule matches a hook event (optionally scoped to one agent and one or more
-// exact tool names) and states the action to take when it matches.
+// Rule matches a hook event (optionally scoped to one agent, one or more
+// exact tool names, and one or more file path patterns) and states the
+// action to take when it matches. Tools and Paths each AND with the rest of
+// the rule; an empty Tools or Paths list means that filter is trivially
+// satisfied.
 type Rule struct {
 	Event  string   `yaml:"event"`
 	Agent  string   `yaml:"agent,omitempty"`
 	Tools  []string `yaml:"tools,omitempty"`
+	Paths  []string `yaml:"paths,omitempty"`
 	Action string   `yaml:"action"`
 	Reason string   `yaml:"reason,omitempty"`
 }
@@ -59,11 +65,15 @@ func Load(path string) (cfg Config, found bool, err error) {
 
 // Event is the generic slice of a hook payload that policy matching needs.
 // Both Claude Code and Cursor use "hook_event_name" and "tool_name" as the
-// relevant JSON keys for tool-related events, so one parse covers both.
+// relevant JSON keys for tool-related events, so one parse covers both. Path
+// is only populated for Claude Code today (tool_input.file_path); an agent
+// without a known file-path field simply yields an empty Path, which never
+// matches a rule's Paths filter.
 type Event struct {
 	Agent string
 	Name  string
 	Tool  string
+	Path  string
 }
 
 // ParseEvent extracts the fields policy needs from a raw hook payload.
@@ -73,9 +83,17 @@ func ParseEvent(agentName string, payload []byte) Event {
 	var fields struct {
 		HookEventName string `json:"hook_event_name"`
 		ToolName      string `json:"tool_name"`
+		ToolInput     struct {
+			FilePath string `json:"file_path"`
+		} `json:"tool_input"`
 	}
 	_ = json.Unmarshal(payload, &fields)
-	return Event{Agent: agentName, Name: fields.HookEventName, Tool: fields.ToolName}
+	return Event{
+		Agent: agentName,
+		Name:  fields.HookEventName,
+		Tool:  fields.ToolName,
+		Path:  fields.ToolInput.FilePath,
+	}
 }
 
 // Resolve evaluates every rule in cfg against evt and returns the resulting
@@ -105,15 +123,104 @@ func ruleMatches(r Rule, evt Event) bool {
 	if r.Agent != "" && r.Agent != evt.Agent {
 		return false
 	}
-	if len(r.Tools) == 0 {
-		return true
+	if len(r.Tools) > 0 && !toolMatches(r.Tools, evt.Tool) {
+		return false
 	}
-	for _, t := range r.Tools {
-		if t == evt.Tool {
+	if len(r.Paths) > 0 && !pathsMatch(r.Paths, evt.Path) {
+		return false
+	}
+	return true
+}
+
+func toolMatches(tools []string, tool string) bool {
+	for _, t := range tools {
+		if t == tool {
 			return true
 		}
 	}
 	return false
+}
+
+func pathsMatch(patterns []string, p string) bool {
+	for _, pattern := range patterns {
+		if pathMatches(pattern, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// pathMatches reports whether pattern matches path, using gitignore-style
+// component matching rather than a substring test (so a pattern like ".env"
+// never wrongly matches a path like "foo.envelope.txt"). An empty path never
+// matches anything, regardless of pattern — that's how a rule with a Paths
+// filter fails open against an event with no known file path.
+//
+//   - A pattern with no "/" (e.g. ".env", "*.env") matches the path's final
+//     component only, anchoring the pattern at any depth in the tree.
+//   - A pattern ending in "/" (e.g. ".git/") matches if any non-final
+//     component of the path equals the pattern (directory anchor).
+//   - A pattern containing "/" but not ending in it (e.g. "config/.env")
+//     matches if the path's trailing components equal the pattern's
+//     components in sequence (an anchored suffix match).
+//
+// Each component/pattern segment is compared with exact string equality
+// unless the segment contains a glob metacharacter (*, ?, [), in which case
+// it's compared with path.Match. There is no support for "**", negation, or
+// filesystem/symlink resolution — matching is purely lexical against
+// whatever string the hook payload provided.
+func pathMatches(pattern, p string) bool {
+	components := splitPathComponents(p)
+	if len(components) == 0 {
+		return false
+	}
+
+	switch {
+	case strings.HasSuffix(pattern, "/"):
+		dir := strings.TrimSuffix(pattern, "/")
+		for _, c := range components[:len(components)-1] {
+			if segmentMatches(dir, c) {
+				return true
+			}
+		}
+		return false
+
+	case strings.Contains(pattern, "/"):
+		patternParts := splitPathComponents(pattern)
+		if len(patternParts) == 0 || len(patternParts) > len(components) {
+			return false
+		}
+		suffix := components[len(components)-len(patternParts):]
+		for i, part := range patternParts {
+			if !segmentMatches(part, suffix[i]) {
+				return false
+			}
+		}
+		return true
+
+	default:
+		return segmentMatches(pattern, components[len(components)-1])
+	}
+}
+
+func segmentMatches(pattern, segment string) bool {
+	if !strings.ContainsAny(pattern, "*?[") {
+		return pattern == segment
+	}
+	ok, err := path.Match(pattern, segment)
+	return err == nil && ok
+}
+
+func splitPathComponents(p string) []string {
+	normalized := strings.ReplaceAll(p, `\`, "/")
+	parts := strings.Split(normalized, "/")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 func parseAction(s string) agent.Action {
