@@ -121,9 +121,10 @@ rules:
 		t.Fatal(err)
 	}
 	logPath := filepath.Join(t.TempDir(), "hookmon.log")
+	policyLogPath := filepath.Join(t.TempDir(), "policy.log")
 
 	root := cmd.NewRootCmd()
-	root.SetArgs([]string{"--agent", "claudecode", "--policy-file", policyPath, "--log-file", logPath})
+	root.SetArgs([]string{"--agent", "claudecode", "--policy-file", policyPath, "--log-file", logPath, "--policy-log-file", policyLogPath})
 	root.SetIn(strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Bash"}`))
 
 	var stdout bytes.Buffer
@@ -143,6 +144,23 @@ rules:
 	}
 	if !bytes.Contains(b, []byte(`"tool_name": "Bash"`)) {
 		t.Fatalf("log file missing denied call:\n%s", b)
+	}
+
+	// The denial must also be recorded in the policy log.
+	pb, err := os.ReadFile(policyLogPath)
+	if err != nil {
+		t.Fatalf("reading policy log file: %v", err)
+	}
+	for _, want := range []string{
+		`"agent": "claudecode"`,
+		`"event": "PreToolUse"`,
+		`"tool": "Bash"`,
+		`"action": "deny"`,
+		`"reason": "blocked by test policy"`,
+	} {
+		if !bytes.Contains(pb, []byte(want)) {
+			t.Fatalf("policy log missing %q:\n%s", want, pb)
+		}
 	}
 }
 
@@ -191,9 +209,10 @@ rules:
 	if err := os.WriteFile(policyPath, []byte(policyYAML), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	policyLogPath := filepath.Join(t.TempDir(), "policy.log")
 
 	root := cmd.NewRootCmd()
-	root.SetArgs([]string{"--agent", "claudecode", "--policy-file", policyPath})
+	root.SetArgs([]string{"--agent", "claudecode", "--policy-file", policyPath, "--policy-log-file", policyLogPath})
 	root.SetIn(strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"/home/user/project/.env"}}`))
 
 	var stdout bytes.Buffer
@@ -262,5 +281,135 @@ func TestRootCmdMalformedPolicyFailsOpen(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "policy") {
 		t.Fatalf("stderr = %q, want mention of the policy parse error", stderr.String())
+	}
+}
+
+// TestRootCmdPolicyLogSkippedOnAllow confirms an allowed call (no matching
+// rule) never creates the policy log file.
+func TestRootCmdPolicyLogSkippedOnAllow(t *testing.T) {
+	policyPath := filepath.Join(t.TempDir(), "policy.yaml")
+	policyYAML := `
+rules:
+  - event: PreToolUse
+    tools: ["Bash"]
+    action: deny
+`
+	if err := os.WriteFile(policyPath, []byte(policyYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	policyLogPath := filepath.Join(t.TempDir(), "policy.log")
+
+	root := cmd.NewRootCmd()
+	root.SetArgs([]string{"--agent", "claudecode", "--policy-file", policyPath, "--policy-log-file", policyLogPath})
+	root.SetIn(strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Write"}`))
+
+	var stdout bytes.Buffer
+	root.SetOut(&stdout)
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if _, err := os.Stat(policyLogPath); !os.IsNotExist(err) {
+		t.Fatalf("expected no policy log file for an allowed call, stat err = %v", err)
+	}
+}
+
+// TestRootCmdPolicyLogSkippedOnAsk confirms an "ask" decision (not a hard
+// block) never creates the policy log file — only "deny" counts as blocked.
+func TestRootCmdPolicyLogSkippedOnAsk(t *testing.T) {
+	policyPath := filepath.Join(t.TempDir(), "policy.yaml")
+	policyYAML := `
+rules:
+  - event: PreToolUse
+    tools: ["Bash"]
+    action: ask
+`
+	if err := os.WriteFile(policyPath, []byte(policyYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	policyLogPath := filepath.Join(t.TempDir(), "policy.log")
+
+	root := cmd.NewRootCmd()
+	root.SetArgs([]string{"--agent", "claudecode", "--policy-file", policyPath, "--policy-log-file", policyLogPath})
+	root.SetIn(strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Bash"}`))
+
+	var stdout bytes.Buffer
+	root.SetOut(&stdout)
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if _, err := os.Stat(policyLogPath); !os.IsNotExist(err) {
+		t.Fatalf("expected no policy log file for an ask decision, stat err = %v", err)
+	}
+}
+
+// TestRootCmdPolicyLogDisabled confirms an empty --policy-log-file disables
+// the policy log entirely, even when a call is denied.
+func TestRootCmdPolicyLogDisabled(t *testing.T) {
+	policyPath := filepath.Join(t.TempDir(), "policy.yaml")
+	policyYAML := `
+rules:
+  - event: PreToolUse
+    tools: ["Bash"]
+    action: deny
+    reason: "blocked by test policy"
+`
+	if err := os.WriteFile(policyPath, []byte(policyYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	root := cmd.NewRootCmd()
+	root.SetArgs([]string{"--agent", "claudecode", "--policy-file", policyPath, "--policy-log-file", ""})
+	root.SetIn(strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Bash"}`))
+
+	var stdout bytes.Buffer
+	root.SetOut(&stdout)
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"permissionDecision":"deny"`) {
+		t.Fatalf("stdout = %q, want a deny decision", stdout.String())
+	}
+}
+
+// TestRootCmdPolicyLogDefaultFilename confirms the policy log is on by
+// default: with no --policy-log-file override, a denied call writes
+// ".hookmon-policy.log" in the current directory.
+func TestRootCmdPolicyLogDefaultFilename(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	policyYAML := `
+rules:
+  - event: PreToolUse
+    tools: ["Bash"]
+    action: deny
+    reason: "blocked by test policy"
+`
+	if err := os.WriteFile(".hookmon-policy.yaml", []byte(policyYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	root := cmd.NewRootCmd()
+	root.SetArgs([]string{"--agent", "claudecode"})
+	root.SetIn(strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Bash"}`))
+
+	var stdout bytes.Buffer
+	root.SetOut(&stdout)
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"permissionDecision":"deny"`) {
+		t.Fatalf("stdout = %q, want a deny decision", stdout.String())
+	}
+
+	b, err := os.ReadFile(".hookmon-policy.log")
+	if err != nil {
+		t.Fatalf("reading default policy log file: %v", err)
+	}
+	if !bytes.Contains(b, []byte(`"action": "deny"`)) {
+		t.Fatalf("policy log missing deny record:\n%s", b)
 	}
 }

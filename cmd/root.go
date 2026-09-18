@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -86,6 +87,23 @@ func NewRootCmd() *cobra.Command {
 			evt := policy.ParseEvent(cfg.Agent, payload)
 			decision := policy.Resolve(policyCfg, evt)
 
+			// Fail-open: policy-log write errors go to stderr; never block
+			// acknowledgment.
+			if decision.Action == agent.Deny {
+				rec := relay.PolicyDecision{
+					Time:   time.Now().UTC().Format(time.RFC3339),
+					Agent:  cfg.Agent,
+					Event:  evt.Name,
+					Tool:   evt.Tool,
+					Path:   evt.Path,
+					Action: decision.Action.String(),
+					Reason: decision.Reason,
+				}
+				if err := relay.LogPolicyDecision(cfg.Config, rec); err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "hookmon: policy log: %v\n", err)
+				}
+			}
+
 			if err := p.Acknowledge(cmd.OutOrStdout(), evt.Name, decision); err != nil {
 				fmt.Fprintf(os.Stderr, "hookmon: acknowledge: %v\n", err)
 			}
@@ -97,10 +115,12 @@ func NewRootCmd() *cobra.Command {
 	rootCmd.Flags().String("agent", "cursor", "agent provider name")
 	rootCmd.Flags().String("log-file", "", "path to log file (absolute or relative); unset disables logging")
 	rootCmd.Flags().String("policy-file", ".hookmon-policy.yaml", "path to policy file (YAML); missing file disables blocking")
+	rootCmd.Flags().String("policy-log-file", ".hookmon-policy.log", "path to policy decision log file (denied actions only); empty disables it")
 
 	v.SetDefault("agent", "cursor")
 	v.SetDefault("log-file", "")
 	v.SetDefault("policy-file", ".hookmon-policy.yaml")
+	v.SetDefault("policy-log-file", ".hookmon-policy.log")
 
 	return rootCmd
 }

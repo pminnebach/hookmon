@@ -81,7 +81,32 @@ matching file path in the event (e.g. a `Bash` call, which has no
 missing policy file, a policy file that fails to parse, or a hook/tool that
 matches no rule all behave exactly like no policy being configured at all —
 they never block anything. Logging is unaffected either way: a denied call
-still gets written to `--log-file`.
+still gets written to `--log-file` (the raw envelope) and, by default, to
+`--policy-log-file` as a structured decision record; allowed and asked calls
+are never written to `--policy-log-file`.
+
+### Logging blocked calls
+
+Every `deny` decision is additionally appended to `--policy-log-file` as a
+structured JSON record, separate from the raw envelope written to
+`--log-file`:
+
+```json
+{
+  "time": "2026-09-18T12:00:00Z",
+  "agent": "claudecode",
+  "event": "PreToolUse",
+  "tool": "Bash",
+  "path": "",
+  "action": "deny",
+  "reason": "Direct Bash calls are blocked by hookmon policy."
+}
+```
+
+Configure the path with `--policy-log-file`, `HOOKMON_POLICY_LOG_FILE`, or
+`policy-log-file:` in `.hookmon.yaml` (default: `.hookmon-policy.log` in the
+current directory). Set it to an empty string to disable this log entirely.
+Only `deny` decisions are recorded — `allow` and `ask` never write an entry.
 
 Only a subset of hook events actually support blocking, because each
 event's real acknowledgment schema differs:
