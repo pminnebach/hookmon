@@ -9,6 +9,14 @@ rules:
     action: deny
     reason: ".env files are blocked by hookmon policy; secrets must not be read or edited by the agent."
 
+  # Block Claude Code from reading or writing .env files directly.
+  - event: PreToolUse
+    agent: claudecode
+    tools: ["Write"]
+    paths: [".hookmon-policy.yaml"]
+    action: deny
+    reason: "Agents should be able to modify the hookmon policy."
+
   # Block Claude Code from running `git push` via Bash.
   - event: PreToolUse
     agent: claudecode
