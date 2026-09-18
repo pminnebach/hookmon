@@ -28,6 +28,49 @@ capture events.
 
 Default log file: none (`--log-file`, `HOOKMON_LOG_FILE`, or `.hookmon.yaml`).
 
+## Blocking tool calls with policy
+
+By default hookmon only observes — every hook call is acknowledged as
+allowed. To actually **block** specific tools at specific hook events, add a
+shared, checked-in policy file (see
+[examples/policy/.hookmon-policy.yaml](examples/policy/.hookmon-policy.yaml)):
+
+```yaml
+rules:
+  - event: PreToolUse
+    agent: claudecode
+    tools: ["Bash"]
+    action: deny
+    reason: "Direct Bash calls are blocked by hookmon policy."
+
+default-action: allow
+```
+
+Point hookmon at it with `--policy-file`, `HOOKMON_POLICY_FILE`, or
+`policy-file:` in `.hookmon.yaml` (default: `.hookmon-policy.yaml` in the
+current directory). Each rule matches a hook `event` name (agent-native
+casing, e.g. `PreToolUse` for Claude Code, `preToolUse` for Cursor),
+optionally scoped to one `agent` and one or more exact `tools`; `action` is
+`allow`, `deny`, or `ask`. When several rules match, the strictest wins
+(`deny` > `ask` > `allow`).
+
+**Fail-open by design**, matching every other error path in hookmon: a
+missing policy file, a policy file that fails to parse, or a hook/tool that
+matches no rule all behave exactly like no policy being configured at all —
+they never block anything. Logging is unaffected either way: a denied call
+still gets written to `--log-file`.
+
+Only a subset of hook events actually support blocking, because each
+event's real acknowledgment schema differs:
+
+- **Claude Code**: only `PreToolUse` (via
+  `hookSpecificOutput.permissionDecision`). Other events use a different,
+  unimplemented `decision` schema and are always acknowledged with `{}`
+  regardless of matching rules.
+- **Cursor**: `preToolUse`, `postToolUse`, `postToolUseFailure`,
+  `beforeShellExecution`, `beforeMCPExecution`, `beforeReadFile`,
+  `subagentStart`, `beforeTabFileRead` (via `{"permission": ...}`).
+
 ## Cursor hooks
 
 Copy [examples/cursor/hooks.json](examples/cursor/hooks.json) to `~/.cursor/hooks.json` or project `.cursor/hooks.json`. Point `command` at your binary:

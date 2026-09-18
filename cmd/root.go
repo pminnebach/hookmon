@@ -13,8 +13,16 @@ import (
 	"hookmon/agent"
 	_ "hookmon/agent/claudecode" // register claudecode provider
 	_ "hookmon/agent/cursor"     // register cursor provider
+	"hookmon/policy"
 	"hookmon/relay"
 )
+
+// config is hookmon's full per-invocation configuration: relay.Config
+// (logging) plus where to find the policy file.
+type config struct {
+	relay.Config `mapstructure:",squash"`
+	PolicyFile   string `mapstructure:"policy-file"`
+}
 
 var (
 	version = "dev"
@@ -41,7 +49,7 @@ func NewRootCmd() *cobra.Command {
 			return initConfig(v, cmd)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			var cfg relay.Config
+			var cfg config
 			if err := v.Unmarshal(&cfg); err != nil {
 				return fmt.Errorf("decoding config: %w", err)
 			}
@@ -59,15 +67,26 @@ func NewRootCmd() *cobra.Command {
 			payload, err := io.ReadAll(cmd.InOrStdin())
 			if err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "hookmon: read stdin: %v\n", err)
-				_ = p.Acknowledge(cmd.OutOrStdout())
+				_ = p.Acknowledge(cmd.OutOrStdout(), "", agent.Decision{})
 				return nil
 			}
 
 			// Fail-open: logging errors go to stderr; always acknowledge.
-			if err := relay.Log(cfg, payload); err != nil {
+			if err := relay.Log(cfg.Config, payload); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "hookmon: %v\n", err)
 			}
-			if err := p.Acknowledge(cmd.OutOrStdout()); err != nil {
+
+			// Fail-open: a missing or malformed policy file behaves exactly
+			// like no policy configured (allow everything).
+			policyCfg, _, err := policy.Load(cfg.PolicyFile)
+			if err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "hookmon: policy: %v\n", err)
+				policyCfg = policy.Config{}
+			}
+			evt := policy.ParseEvent(cfg.Agent, payload)
+			decision := policy.Resolve(policyCfg, evt)
+
+			if err := p.Acknowledge(cmd.OutOrStdout(), evt.Name, decision); err != nil {
 				fmt.Fprintf(os.Stderr, "hookmon: acknowledge: %v\n", err)
 			}
 			return nil
@@ -77,9 +96,11 @@ func NewRootCmd() *cobra.Command {
 	rootCmd.Flags().String("config", "", "config file path")
 	rootCmd.Flags().String("agent", "cursor", "agent provider name")
 	rootCmd.Flags().String("log-file", "", "path to log file (absolute or relative); unset disables logging")
+	rootCmd.Flags().String("policy-file", ".hookmon-policy.yaml", "path to policy file (YAML); missing file disables blocking")
 
 	v.SetDefault("agent", "cursor")
 	v.SetDefault("log-file", "")
+	v.SetDefault("policy-file", ".hookmon-policy.yaml")
 
 	return rootCmd
 }

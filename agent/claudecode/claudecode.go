@@ -24,8 +24,46 @@ func (Provider) Events() []string {
 	return names
 }
 
-func (Provider) Acknowledge(stdout io.Writer) error {
-	_, err := io.WriteString(stdout, "{}\n")
+// permissionDecisionOutput is the PreToolUse hookSpecificOutput shape Claude
+// Code uses to allow/deny/ask a tool call. Other events use a different,
+// unresearched "decision" schema and are not supported here yet — see
+// eventSpec.PermissionDecision.
+type permissionDecisionOutput struct {
+	HookSpecificOutput struct {
+		HookEventName            string `json:"hookEventName"`
+		PermissionDecision       string `json:"permissionDecision"`
+		PermissionDecisionReason string `json:"permissionDecisionReason,omitempty"`
+	} `json:"hookSpecificOutput"`
+}
+
+func (Provider) Acknowledge(stdout io.Writer, event string, decision agent.Decision) error {
+	if decision.Action == agent.Allow && decision.Reason == "" {
+		_, err := io.WriteString(stdout, "{}\n")
+		return err
+	}
+
+	var spec eventSpec
+	for _, e := range events {
+		if e.Name == event {
+			spec = e
+			break
+		}
+	}
+	if !spec.PermissionDecision {
+		_, err := io.WriteString(stdout, "{}\n")
+		return err
+	}
+
+	var out permissionDecisionOutput
+	out.HookSpecificOutput.HookEventName = event
+	out.HookSpecificOutput.PermissionDecision = decision.Action.String()
+	out.HookSpecificOutput.PermissionDecisionReason = decision.Reason
+
+	b, err := json.Marshal(out)
+	if err != nil {
+		return err
+	}
+	_, err = stdout.Write(append(b, '\n'))
 	return err
 }
 
@@ -55,46 +93,54 @@ func (Provider) HooksConfig(sendCmd string) ([]byte, error) {
 }
 
 // eventSpec is a hook event name plus whether Claude Code supports a
-// "matcher" for it (tool name, trigger type, etc.).
+// "matcher" for it (tool name, trigger type, etc.), and whether it accepts a
+// hookSpecificOutput.permissionDecision response.
+//
+// PermissionDecision is set only for PreToolUse: it's the only event with a
+// confirmed permissionDecision schema. Other events that can influence
+// control flow (PostToolUse, Stop, ...) use a different, unresearched
+// top-level "decision" field and are a deliberate scope cut for now, not an
+// oversight.
 type eventSpec struct {
-	Name    string
-	Matcher bool
+	Name               string
+	Matcher            bool
+	PermissionDecision bool
 }
 
 // All Claude Code hook events from the "Hook lifecycle" table at
 // https://code.claude.com/docs/en/hooks
 var events = []eventSpec{
-	{"SessionStart", true},
-	{"Setup", true},
-	{"UserPromptSubmit", false},
-	{"UserPromptExpansion", true},
-	{"PreToolUse", true},
-	{"PermissionRequest", true},
-	{"PermissionDenied", true},
-	{"PostToolUse", true},
-	{"PostToolUseFailure", true},
-	{"PostToolBatch", false},
-	{"Notification", true},
-	{"MessageDisplay", false},
-	{"SubagentStart", true},
-	{"SubagentStop", true},
-	{"TaskCreated", false},
-	{"TaskCompleted", false},
-	{"Stop", false},
-	{"StopFailure", true},
-	{"TeammateIdle", false},
-	{"InstructionsLoaded", true},
-	{"ConfigChange", true},
-	{"CwdChanged", false},
-	{"DirectoryAdded", true},
-	{"FileChanged", true},
-	{"WorktreeCreate", false},
-	{"WorktreeRemove", false},
-	{"PreCompact", true},
-	{"PostCompact", true},
-	{"PreModelSwitch", true},
-	{"PostModelSwitch", true},
-	{"Elicitation", true},
-	{"ElicitationResult", true},
-	{"SessionEnd", true},
+	{Name: "SessionStart", Matcher: true},
+	{Name: "Setup", Matcher: true},
+	{Name: "UserPromptSubmit", Matcher: false},
+	{Name: "UserPromptExpansion", Matcher: true},
+	{Name: "PreToolUse", Matcher: true, PermissionDecision: true},
+	{Name: "PermissionRequest", Matcher: true},
+	{Name: "PermissionDenied", Matcher: true},
+	{Name: "PostToolUse", Matcher: true},
+	{Name: "PostToolUseFailure", Matcher: true},
+	{Name: "PostToolBatch", Matcher: false},
+	{Name: "Notification", Matcher: true},
+	{Name: "MessageDisplay", Matcher: false},
+	{Name: "SubagentStart", Matcher: true},
+	{Name: "SubagentStop", Matcher: true},
+	{Name: "TaskCreated", Matcher: false},
+	{Name: "TaskCompleted", Matcher: false},
+	{Name: "Stop", Matcher: false},
+	{Name: "StopFailure", Matcher: true},
+	{Name: "TeammateIdle", Matcher: false},
+	{Name: "InstructionsLoaded", Matcher: true},
+	{Name: "ConfigChange", Matcher: true},
+	{Name: "CwdChanged", Matcher: false},
+	{Name: "DirectoryAdded", Matcher: true},
+	{Name: "FileChanged", Matcher: true},
+	{Name: "WorktreeCreate", Matcher: false},
+	{Name: "WorktreeRemove", Matcher: false},
+	{Name: "PreCompact", Matcher: true},
+	{Name: "PostCompact", Matcher: true},
+	{Name: "PreModelSwitch", Matcher: true},
+	{Name: "PostModelSwitch", Matcher: true},
+	{Name: "Elicitation", Matcher: true},
+	{Name: "ElicitationResult", Matcher: true},
+	{Name: "SessionEnd", Matcher: true},
 }

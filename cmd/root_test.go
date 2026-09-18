@@ -86,3 +86,118 @@ func TestRootCmdUnknownAgent(t *testing.T) {
 		t.Fatalf("stderr = %q, want mention of unknown agent", stderr.String())
 	}
 }
+
+// TestRootCmdNoPolicyFileFailsOpen confirms hookmon still allows tool calls
+// when no --policy-file is configured (the default path doesn't exist in a
+// fresh temp dir).
+func TestRootCmdNoPolicyFileFailsOpen(t *testing.T) {
+	root := cmd.NewRootCmd()
+	root.SetArgs([]string{"--agent", "claudecode", "--policy-file", filepath.Join(t.TempDir(), "missing.yaml")})
+	root.SetIn(strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Bash"}`))
+
+	var stdout bytes.Buffer
+	root.SetOut(&stdout)
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if stdout.String() != "{}\n" {
+		t.Fatalf("stdout = %q, want %q", stdout.String(), "{}\n")
+	}
+}
+
+// TestRootCmdPolicyDeniesTool confirms a matching deny rule in the policy
+// file actually blocks the tool call via the provider's decision shape.
+func TestRootCmdPolicyDeniesTool(t *testing.T) {
+	policyPath := filepath.Join(t.TempDir(), "policy.yaml")
+	policyYAML := `
+rules:
+  - event: PreToolUse
+    tools: ["Bash"]
+    action: deny
+    reason: "blocked by test policy"
+`
+	if err := os.WriteFile(policyPath, []byte(policyYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(t.TempDir(), "hookmon.log")
+
+	root := cmd.NewRootCmd()
+	root.SetArgs([]string{"--agent", "claudecode", "--policy-file", policyPath, "--log-file", logPath})
+	root.SetIn(strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Bash"}`))
+
+	var stdout bytes.Buffer
+	root.SetOut(&stdout)
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"permissionDecision":"deny"`) {
+		t.Fatalf("stdout = %q, want a deny decision", stdout.String())
+	}
+
+	// The call must still be logged even though it was denied.
+	b, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("reading log file: %v", err)
+	}
+	if !bytes.Contains(b, []byte(`"tool_name": "Bash"`)) {
+		t.Fatalf("log file missing denied call:\n%s", b)
+	}
+}
+
+// TestRootCmdPolicyAllowsUnmatchedTool confirms a policy file with rules
+// that don't match the incoming tool still allows it.
+func TestRootCmdPolicyAllowsUnmatchedTool(t *testing.T) {
+	policyPath := filepath.Join(t.TempDir(), "policy.yaml")
+	policyYAML := `
+rules:
+  - event: PreToolUse
+    tools: ["Bash"]
+    action: deny
+`
+	if err := os.WriteFile(policyPath, []byte(policyYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	root := cmd.NewRootCmd()
+	root.SetArgs([]string{"--agent", "claudecode", "--policy-file", policyPath})
+	root.SetIn(strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Write"}`))
+
+	var stdout bytes.Buffer
+	root.SetOut(&stdout)
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if stdout.String() != "{}\n" {
+		t.Fatalf("stdout = %q, want %q", stdout.String(), "{}\n")
+	}
+}
+
+// TestRootCmdMalformedPolicyFailsOpen confirms a policy file that fails to
+// parse doesn't block anything — it's treated as if no policy existed.
+func TestRootCmdMalformedPolicyFailsOpen(t *testing.T) {
+	policyPath := filepath.Join(t.TempDir(), "policy.yaml")
+	if err := os.WriteFile(policyPath, []byte("not: [valid yaml"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	root := cmd.NewRootCmd()
+	root.SetArgs([]string{"--agent", "claudecode", "--policy-file", policyPath})
+	root.SetIn(strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Bash"}`))
+
+	var stdout, stderr bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if stdout.String() != "{}\n" {
+		t.Fatalf("stdout = %q, want %q", stdout.String(), "{}\n")
+	}
+	if !strings.Contains(stderr.String(), "policy") {
+		t.Fatalf("stderr = %q, want mention of the policy parse error", stderr.String())
+	}
+}

@@ -28,11 +28,58 @@ func TestAcknowledge(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	if err := p.Acknowledge(&buf); err != nil {
+	if err := p.Acknowledge(&buf, "Stop", agent.Decision{}); err != nil {
 		t.Fatal(err)
 	}
 	if buf.String() != "{}\n" {
 		t.Fatalf("ack = %q", buf.String())
+	}
+}
+
+func TestAcknowledgeDenyPreToolUse(t *testing.T) {
+	p, err := agent.Lookup("claudecode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	decision := agent.Decision{Action: agent.Deny, Reason: "blocked by policy"}
+	if err := p.Acknowledge(&buf, "PreToolUse", decision); err != nil {
+		t.Fatal(err)
+	}
+
+	var out struct {
+		HookSpecificOutput struct {
+			HookEventName            string `json:"hookEventName"`
+			PermissionDecision       string `json:"permissionDecision"`
+			PermissionDecisionReason string `json:"permissionDecisionReason"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal ack: %v\nack = %q", err, buf.String())
+	}
+	if out.HookSpecificOutput.HookEventName != "PreToolUse" {
+		t.Fatalf("hookEventName = %q", out.HookSpecificOutput.HookEventName)
+	}
+	if out.HookSpecificOutput.PermissionDecision != "deny" {
+		t.Fatalf("permissionDecision = %q", out.HookSpecificOutput.PermissionDecision)
+	}
+	if out.HookSpecificOutput.PermissionDecisionReason != "blocked by policy" {
+		t.Fatalf("permissionDecisionReason = %q", out.HookSpecificOutput.PermissionDecisionReason)
+	}
+}
+
+func TestAcknowledgeDenyUnsupportedEventStaysNoop(t *testing.T) {
+	p, err := agent.Lookup("claudecode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	decision := agent.Decision{Action: agent.Deny, Reason: "should be ignored"}
+	if err := p.Acknowledge(&buf, "Stop", decision); err != nil {
+		t.Fatal(err)
+	}
+	if buf.String() != "{}\n" {
+		t.Fatalf("ack = %q, want {}\\n (Stop doesn't support permissionDecision)", buf.String())
 	}
 }
 

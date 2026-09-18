@@ -1,0 +1,29 @@
+# Copy to .hookmon-policy.yaml at your project root (or point --policy-file /
+# HOOKMON_POLICY_FILE at a different path) and check it in — this is meant to
+# be a shared, reviewed policy, not personal config.
+#
+# A missing file, a file that fails to parse, or a hook event/tool that
+# matches no rule below all resolve to "allow" (fail-open), same as if no
+# policy were configured at all.
+#
+# Only events with real blocking support in each provider act on this file:
+# Claude Code's PreToolUse, and Cursor's preToolUse, postToolUse,
+# postToolUseFailure, beforeShellExecution, beforeMCPExecution,
+# beforeReadFile, subagentStart, beforeTabFileRead. Rules for other events
+# are parsed but never enforced.
+rules:
+  # Block direct Bash calls from Claude Code; everything else stays allowed.
+  - event: PreToolUse
+    agent: claudecode
+    tools: ["Bash"]
+    action: deny
+    reason: "Direct Bash calls are blocked by hookmon policy; use the approved CI wrapper instead."
+
+  # Same idea for Cursor's shell hook.
+  - event: beforeShellExecution
+    agent: cursor
+    action: deny
+    reason: "Shell execution is blocked by hookmon policy."
+
+# Applies when no rule above matches. Defaults to "allow" if omitted.
+default-action: allow

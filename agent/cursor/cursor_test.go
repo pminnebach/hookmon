@@ -28,11 +28,53 @@ func TestAcknowledge(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	if err := p.Acknowledge(&buf); err != nil {
+	if err := p.Acknowledge(&buf, "stop", agent.Decision{}); err != nil {
 		t.Fatal(err)
 	}
 	if buf.String() != "{}\n" {
 		t.Fatalf("ack = %q", buf.String())
+	}
+}
+
+func TestAcknowledgeDenyPreToolUse(t *testing.T) {
+	p, err := agent.Lookup("cursor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	decision := agent.Decision{Action: agent.Deny, Reason: "blocked by policy"}
+	if err := p.Acknowledge(&buf, "preToolUse", decision); err != nil {
+		t.Fatal(err)
+	}
+
+	var out struct {
+		Permission   string `json:"permission"`
+		UserMessage  string `json:"user_message"`
+		AgentMessage string `json:"agent_message"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal ack: %v\nack = %q", err, buf.String())
+	}
+	if out.Permission != "deny" {
+		t.Fatalf("permission = %q", out.Permission)
+	}
+	if out.UserMessage != "blocked by policy" || out.AgentMessage != "blocked by policy" {
+		t.Fatalf("messages = %+v", out)
+	}
+}
+
+func TestAcknowledgeDenyUnsupportedEventStaysNoop(t *testing.T) {
+	p, err := agent.Lookup("cursor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	decision := agent.Decision{Action: agent.Deny, Reason: "should be ignored"}
+	if err := p.Acknowledge(&buf, "stop", decision); err != nil {
+		t.Fatal(err)
+	}
+	if buf.String() != "{}\n" {
+		t.Fatalf("ack = %q, want {}\\n (stop doesn't support permission)", buf.String())
 	}
 }
 
