@@ -1,6 +1,9 @@
 # Built binary
 /hookmon
 
+# .env
+.env
+
 # Temporary / scratch
 tmp
 tmp/
