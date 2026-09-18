@@ -9,7 +9,8 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	_ "hookmon/agent/cursor" // register cursor provider
+	_ "hookmon/agent/claudecode" // register claudecode provider
+	_ "hookmon/agent/cursor"     // register cursor provider
 )
 
 var (

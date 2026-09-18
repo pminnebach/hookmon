@@ -70,6 +70,79 @@ func TestSendListenRoundTrip(t *testing.T) {
 	t.Fatalf("listen output missing envelope:\n%s", got)
 }
 
+func TestSendListenRoundTrip_ClaudeCode(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+
+	var buf bytes.Buffer
+	var mu sync.Mutex
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = relay.Listen(ctx, relay.Config{Addr: addr}, &safeWriter{mu: &mu, w: &buf})
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		c, err := net.DialTimeout("tcp", addr, 50*time.Millisecond)
+		if err == nil {
+			c.Close()
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	cfg := relay.Config{Addr: addr, Agent: "claudecode"}
+	errOut := &bytes.Buffer{}
+
+	preToolUse := []byte(`{"session_id":"test","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"echo hi"},"cwd":"/workspace","transcript_path":"/tmp/t.json"}`)
+	if err := relay.Send(t.Context(), cfg, preToolUse, errOut); err != nil {
+		t.Fatalf("Send(PreToolUse): %v (stderr=%s)", err, errOut)
+	}
+	waitForOutput(t, &mu, &buf, `"agent": "claudecode"`, `"hook_event_name": "PreToolUse"`, `"tool_name": "Bash"`)
+
+	postToolUse := []byte(`{"session_id":"test","hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"echo hi"},"tool_response":"hi","cwd":"/workspace","transcript_path":"/tmp/t.json"}`)
+	if err := relay.Send(t.Context(), cfg, postToolUse, errOut); err != nil {
+		t.Fatalf("Send(PostToolUse): %v (stderr=%s)", err, errOut)
+	}
+	waitForOutput(t, &mu, &buf, `"agent": "claudecode"`, `"hook_event_name": "PostToolUse"`, `"tool_response"`)
+
+	cancel()
+	<-done
+}
+
+func waitForOutput(t *testing.T, mu *sync.Mutex, buf *bytes.Buffer, want ...string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		got := buf.String()
+		mu.Unlock()
+		ok := true
+		for _, w := range want {
+			if !bytes.Contains([]byte(got), []byte(w)) {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	mu.Lock()
+	got := buf.String()
+	mu.Unlock()
+	t.Fatalf("listen output missing %v:\n%s", want, got)
+}
+
 func TestListenToFile(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
