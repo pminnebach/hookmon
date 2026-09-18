@@ -15,7 +15,7 @@ rules:
     tools: ["Write"]
     paths: [".hookmon-policy.yaml"]
     action: deny
-    reason: "Agents should be able to modify the hookmon policy."
+    reason: "Agents should not be able to modify the hookmon policy."
 
   # Block Claude Code from running `git push` via Bash.
   - event: PreToolUse
