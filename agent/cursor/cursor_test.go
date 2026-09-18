@@ -41,7 +41,7 @@ func TestHooksConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, err := p.HooksConfig("/workspace/hookmon send --agent cursor")
+	raw, err := p.HooksConfig("/workspace/hookmon --agent cursor")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestHooksConfig(t *testing.T) {
 		if !ok || len(entries) == 0 {
 			t.Fatalf("missing hook event %q", e)
 		}
-		if entries[0]["command"] != "/workspace/hookmon send --agent cursor" {
+		if entries[0]["command"] != "/workspace/hookmon --agent cursor" {
 			t.Fatalf("command for %s = %q", e, entries[0]["command"])
 		}
 	}

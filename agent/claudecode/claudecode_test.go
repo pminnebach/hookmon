@@ -41,7 +41,7 @@ func TestHooksConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const sendCmd = "${CLAUDE_PROJECT_DIR}/hookmon send --agent claudecode"
+	const sendCmd = "${CLAUDE_PROJECT_DIR}/hookmon --agent claudecode"
 	raw, err := p.HooksConfig(sendCmd)
 	if err != nil {
 		t.Fatal(err)

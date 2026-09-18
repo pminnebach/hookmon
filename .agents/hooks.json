@@ -3,107 +3,107 @@
   "hooks": {
     "sessionStart": [
       {
-        "command": "/workspace/hookmon send --agent cursor"
+        "command": "/workspace/hookmon --agent cursor --log-file /workspace/hooks.log"
       }
     ],
     "sessionEnd": [
       {
-        "command": "/workspace/hookmon send --agent cursor"
+        "command": "/workspace/hookmon --agent cursor --log-file /workspace/hooks.log"
       }
     ],
     "preToolUse": [
       {
-        "command": "/workspace/hookmon send --agent cursor"
+        "command": "/workspace/hookmon --agent cursor --log-file /workspace/hooks.log"
       }
     ],
     "postToolUse": [
       {
-        "command": "/workspace/hookmon send --agent cursor"
+        "command": "/workspace/hookmon --agent cursor --log-file /workspace/hooks.log"
       }
     ],
     "postToolUseFailure": [
       {
-        "command": "/workspace/hookmon send --agent cursor"
+        "command": "/workspace/hookmon --agent cursor --log-file /workspace/hooks.log"
       }
     ],
     "subagentStart": [
       {
-        "command": "/workspace/hookmon send --agent cursor"
+        "command": "/workspace/hookmon --agent cursor --log-file /workspace/hooks.log"
       }
     ],
     "subagentStop": [
       {
-        "command": "/workspace/hookmon send --agent cursor"
+        "command": "/workspace/hookmon --agent cursor --log-file /workspace/hooks.log"
       }
     ],
     "beforeShellExecution": [
       {
-        "command": "/workspace/hookmon send --agent cursor"
+        "command": "/workspace/hookmon --agent cursor --log-file /workspace/hooks.log"
       }
     ],
     "afterShellExecution": [
       {
-        "command": "/workspace/hookmon send --agent cursor"
+        "command": "/workspace/hookmon --agent cursor --log-file /workspace/hooks.log"
       }
     ],
     "beforeMCPExecution": [
       {
-        "command": "/workspace/hookmon send --agent cursor"
+        "command": "/workspace/hookmon --agent cursor --log-file /workspace/hooks.log"
       }
     ],
     "afterMCPExecution": [
       {
-        "command": "/workspace/hookmon send --agent cursor"
+        "command": "/workspace/hookmon --agent cursor --log-file /workspace/hooks.log"
       }
     ],
     "beforeReadFile": [
       {
-        "command": "/workspace/hookmon send --agent cursor"
+        "command": "/workspace/hookmon --agent cursor --log-file /workspace/hooks.log"
       }
     ],
     "afterFileEdit": [
       {
-        "command": "/workspace/hookmon send --agent cursor"
+        "command": "/workspace/hookmon --agent cursor --log-file /workspace/hooks.log"
       }
     ],
     "beforeSubmitPrompt": [
       {
-        "command": "/workspace/hookmon send --agent cursor"
+        "command": "/workspace/hookmon --agent cursor --log-file /workspace/hooks.log"
       }
     ],
     "preCompact": [
       {
-        "command": "/workspace/hookmon send --agent cursor"
+        "command": "/workspace/hookmon --agent cursor --log-file /workspace/hooks.log"
       }
     ],
     "stop": [
       {
-        "command": "/workspace/hookmon send --agent cursor"
+        "command": "/workspace/hookmon --agent cursor --log-file /workspace/hooks.log"
       }
     ],
     "afterAgentResponse": [
       {
-        "command": "/workspace/hookmon send --agent cursor"
+        "command": "/workspace/hookmon --agent cursor --log-file /workspace/hooks.log"
       }
     ],
     "afterAgentThought": [
       {
-        "command": "/workspace/hookmon send --agent cursor"
+        "command": "/workspace/hookmon --agent cursor --log-file /workspace/hooks.log"
       }
     ],
     "beforeTabFileRead": [
       {
-        "command": "/workspace/hookmon send --agent cursor"
+        "command": "/workspace/hookmon --agent cursor --log-file /workspace/hooks.log"
       }
     ],
     "afterTabFileEdit": [
       {
-        "command": "/workspace/hookmon send --agent cursor"
+        "command": "/workspace/hookmon --agent cursor --log-file /workspace/hooks.log"
       }
     ],
     "workspaceOpen": [
       {
-        "command": "/workspace/hookmon send --agent cursor"
+        "command": "/workspace/hookmon --agent cursor --log-file /workspace/hooks.log"
       }
     ]
   }

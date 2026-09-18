@@ -3,14 +3,17 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
+	"hookmon/agent"
 	_ "hookmon/agent/claudecode" // register claudecode provider
 	_ "hookmon/agent/cursor"     // register cursor provider
+	"hookmon/relay"
 )
 
 var (
@@ -19,31 +22,65 @@ var (
 	date    = "unknown"
 )
 
-// NewRootCmd builds the command tree with a fresh Viper instance.
+// NewRootCmd builds the hookmon command with a fresh Viper instance.
+//
+// hookmon has no subcommands: invoking it reads a hook payload from stdin,
+// logs it, and acknowledges. There is no server to start and nothing to
+// dial — each invocation is independent.
 func NewRootCmd() *cobra.Command {
 	v := viper.New()
 
 	rootCmd := &cobra.Command{
 		Use:           "hookmon",
-		Short:         "Relay coding-agent hook payloads to a local listener",
+		Short:         "Read a coding-agent hook payload from stdin and log it to a file",
 		Version:       fmt.Sprintf("%s (commit: %s, built: %s)", version, commit, date),
+		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			return initConfig(v, cmd)
 		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var cfg relay.Config
+			if err := v.Unmarshal(&cfg); err != nil {
+				return fmt.Errorf("decoding config: %w", err)
+			}
+			if cfg.Agent == "" {
+				cfg.Agent = "cursor"
+			}
+
+			p, err := agent.Lookup(cfg.Agent)
+			if err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "hookmon: %v\n", err)
+				_, _ = io.WriteString(cmd.OutOrStdout(), "{}\n")
+				return nil
+			}
+
+			payload, err := io.ReadAll(cmd.InOrStdin())
+			if err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "hookmon: read stdin: %v\n", err)
+				_ = p.Acknowledge(cmd.OutOrStdout())
+				return nil
+			}
+
+			// Fail-open: logging errors go to stderr; always acknowledge.
+			if err := relay.Log(cfg, payload); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "hookmon: %v\n", err)
+			}
+			if err := p.Acknowledge(cmd.OutOrStdout()); err != nil {
+				fmt.Fprintf(os.Stderr, "hookmon: acknowledge: %v\n", err)
+			}
+			return nil
+		},
 	}
 
-	rootCmd.PersistentFlags().String("config", "", "config file path")
-	rootCmd.PersistentFlags().String("addr", "127.0.0.1:9473", "listener address")
-	rootCmd.PersistentFlags().String("log-file", "", "path to log file (listen output; absolute or relative)")
+	rootCmd.Flags().String("config", "", "config file path")
+	rootCmd.Flags().String("agent", "cursor", "agent provider name")
+	rootCmd.Flags().String("log-file", "", "path to log file (absolute or relative); unset disables logging")
 
-	v.SetDefault("addr", "127.0.0.1:9473")
 	v.SetDefault("agent", "cursor")
 	v.SetDefault("log-file", "")
 
-	rootCmd.AddCommand(NewSendCmd(v))
-	rootCmd.AddCommand(NewListenCmd(v))
 	return rootCmd
 }
 
