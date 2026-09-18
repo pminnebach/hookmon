@@ -91,13 +91,14 @@ func NewRootCmd() *cobra.Command {
 			// acknowledgment.
 			if decision.Action == agent.Deny {
 				rec := relay.PolicyDecision{
-					Time:   time.Now().UTC().Format(time.RFC3339),
-					Agent:  cfg.Agent,
-					Event:  evt.Name,
-					Tool:   evt.Tool,
-					Path:   evt.Path,
-					Action: decision.Action.String(),
-					Reason: decision.Reason,
+					Time:    time.Now().UTC().Format(time.RFC3339),
+					Agent:   cfg.Agent,
+					Event:   evt.Name,
+					Tool:    evt.Tool,
+					Path:    evt.Path,
+					Command: evt.Command,
+					Action:  decision.Action.String(),
+					Reason:  decision.Reason,
 				}
 				if err := relay.LogPolicyDecision(cfg.Config, rec); err != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "hookmon: policy log: %v\n", err)

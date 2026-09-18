@@ -117,6 +117,7 @@ structured JSON record, separate from the raw envelope written to
   "event": "PreToolUse",
   "tool": "Bash",
   "path": "",
+  "command": "echo hi",
   "action": "deny",
   "reason": "Direct Bash calls are blocked by hookmon policy."
 }

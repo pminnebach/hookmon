@@ -16,13 +16,14 @@ func TestLogPolicyDecision(t *testing.T) {
 	cfg := relay.Config{PolicyLogFile: path}
 
 	d := relay.PolicyDecision{
-		Time:   "2026-09-18T12:00:00Z",
-		Agent:  "claudecode",
-		Event:  "PreToolUse",
-		Tool:   "Bash",
-		Path:   "",
-		Action: "deny",
-		Reason: "blocked by test policy",
+		Time:    "2026-09-18T12:00:00Z",
+		Agent:   "claudecode",
+		Event:   "PreToolUse",
+		Tool:    "Bash",
+		Path:    "",
+		Command: "git push origin main",
+		Action:  "deny",
+		Reason:  "blocked by test policy",
 	}
 	if err := relay.LogPolicyDecision(cfg, d); err != nil {
 		t.Fatalf("LogPolicyDecision: %v", err)
@@ -45,6 +46,7 @@ func TestLogPolicyDecision(t *testing.T) {
 		`"agent": "claudecode"`,
 		`"event": "PreToolUse"`,
 		`"tool": "Bash"`,
+		`"command": "git push origin main"`,
 		`"action": "deny"`,
 		`"reason": "blocked by test policy"`,
 	} {
@@ -128,13 +130,14 @@ func TestLogPolicyDecisionConcurrentWriters(t *testing.T) {
 
 func TestPolicyDecisionMarshal(t *testing.T) {
 	d := relay.PolicyDecision{
-		Time:   "2026-09-18T12:00:00Z",
-		Agent:  "cursor",
-		Event:  "preToolUse",
-		Tool:   "Shell",
-		Path:   "/tmp/x",
-		Action: "deny",
-		Reason: "test",
+		Time:    "2026-09-18T12:00:00Z",
+		Agent:   "cursor",
+		Event:   "preToolUse",
+		Tool:    "Shell",
+		Path:    "/tmp/x",
+		Command: "rm -rf /tmp/x",
+		Action:  "deny",
+		Reason:  "test",
 	}
 	b, err := json.Marshal(d)
 	if err != nil {

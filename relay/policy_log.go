@@ -9,13 +9,14 @@ import (
 // PolicyDecision is a structured record of a single denied hook event,
 // written to cfg.PolicyLogFile.
 type PolicyDecision struct {
-	Time   string `json:"time"`
-	Agent  string `json:"agent"`
-	Event  string `json:"event"`
-	Tool   string `json:"tool"`
-	Path   string `json:"path"`
-	Action string `json:"action"`
-	Reason string `json:"reason"`
+	Time    string `json:"time"`
+	Agent   string `json:"agent"`
+	Event   string `json:"event"`
+	Tool    string `json:"tool"`
+	Path    string `json:"path"`
+	Command string `json:"command"`
+	Action  string `json:"action"`
+	Reason  string `json:"reason"`
 }
 
 // LogPolicyDecision appends d to cfg.PolicyLogFile. If cfg.PolicyLogFile is

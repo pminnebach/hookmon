@@ -125,7 +125,7 @@ rules:
 
 	root := cmd.NewRootCmd()
 	root.SetArgs([]string{"--agent", "claudecode", "--policy-file", policyPath, "--log-file", logPath, "--policy-log-file", policyLogPath})
-	root.SetIn(strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Bash"}`))
+	root.SetIn(strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git push origin main"}}`))
 
 	var stdout bytes.Buffer
 	root.SetOut(&stdout)
@@ -155,6 +155,7 @@ rules:
 		`"agent": "claudecode"`,
 		`"event": "PreToolUse"`,
 		`"tool": "Bash"`,
+		`"command": "git push origin main"`,
 		`"action": "deny"`,
 		`"reason": "blocked by test policy"`,
 	} {
