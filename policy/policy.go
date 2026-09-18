@@ -21,17 +21,18 @@ import (
 )
 
 // Rule matches a hook event (optionally scoped to one agent, one or more
-// exact tool names, and one or more file path patterns) and states the
-// action to take when it matches. Tools and Paths each AND with the rest of
-// the rule; an empty Tools or Paths list means that filter is trivially
-// satisfied.
+// exact tool names, one or more file path patterns, and one or more command
+// substrings) and states the action to take when it matches. Tools, Paths,
+// and Commands each AND with the rest of the rule; an empty Tools, Paths, or
+// Commands list means that filter is trivially satisfied.
 type Rule struct {
-	Event  string   `yaml:"event"`
-	Agent  string   `yaml:"agent,omitempty"`
-	Tools  []string `yaml:"tools,omitempty"`
-	Paths  []string `yaml:"paths,omitempty"`
-	Action string   `yaml:"action"`
-	Reason string   `yaml:"reason,omitempty"`
+	Event    string   `yaml:"event"`
+	Agent    string   `yaml:"agent,omitempty"`
+	Tools    []string `yaml:"tools,omitempty"`
+	Paths    []string `yaml:"paths,omitempty"`
+	Commands []string `yaml:"commands,omitempty"`
+	Action   string   `yaml:"action"`
+	Reason   string   `yaml:"reason,omitempty"`
 }
 
 // Config is the parsed contents of a policy file.
@@ -66,14 +67,16 @@ func Load(path string) (cfg Config, found bool, err error) {
 // Event is the generic slice of a hook payload that policy matching needs.
 // Both Claude Code and Cursor use "hook_event_name" and "tool_name" as the
 // relevant JSON keys for tool-related events, so one parse covers both. Path
-// is only populated for Claude Code today (tool_input.file_path); an agent
-// without a known file-path field simply yields an empty Path, which never
-// matches a rule's Paths filter.
+// and Command are only populated for Claude Code today (tool_input.file_path
+// and tool_input.command respectively); an agent without a known field
+// simply yields an empty Path/Command, which never matches a rule's Paths or
+// Commands filter.
 type Event struct {
-	Agent string
-	Name  string
-	Tool  string
-	Path  string
+	Agent   string
+	Name    string
+	Tool    string
+	Path    string
+	Command string
 }
 
 // ParseEvent extracts the fields policy needs from a raw hook payload.
@@ -85,14 +88,16 @@ func ParseEvent(agentName string, payload []byte) Event {
 		ToolName      string `json:"tool_name"`
 		ToolInput     struct {
 			FilePath string `json:"file_path"`
+			Command  string `json:"command"`
 		} `json:"tool_input"`
 	}
 	_ = json.Unmarshal(payload, &fields)
 	return Event{
-		Agent: agentName,
-		Name:  fields.HookEventName,
-		Tool:  fields.ToolName,
-		Path:  fields.ToolInput.FilePath,
+		Agent:   agentName,
+		Name:    fields.HookEventName,
+		Tool:    fields.ToolName,
+		Path:    fields.ToolInput.FilePath,
+		Command: fields.ToolInput.Command,
 	}
 }
 
@@ -129,12 +134,33 @@ func ruleMatches(r Rule, evt Event) bool {
 	if len(r.Paths) > 0 && !pathsMatch(r.Paths, evt.Path) {
 		return false
 	}
+	if len(r.Commands) > 0 && !commandsMatch(r.Commands, evt.Command) {
+		return false
+	}
 	return true
 }
 
 func toolMatches(tools []string, tool string) bool {
 	for _, t := range tools {
 		if t == tool {
+			return true
+		}
+	}
+	return false
+}
+
+// commandsMatch reports whether any pattern is a substring of command. An
+// empty command never matches anything, regardless of pattern — that's how
+// a rule with a Commands filter fails open against an event with no known
+// command (e.g. a non-Bash tool, or an agent that doesn't report one).
+// Matching is a plain substring test, not a glob or regex, so a pattern like
+// "git push" also matches "git push --force" or "git push origin main".
+func commandsMatch(patterns []string, command string) bool {
+	if command == "" {
+		return false
+	}
+	for _, pattern := range patterns {
+		if strings.Contains(command, pattern) {
 			return true
 		}
 	}

@@ -9,4 +9,12 @@ rules:
     action: deny
     reason: ".env files are blocked by hookmon policy; secrets must not be read or edited by the agent."
 
+  # Block Claude Code from running `git push` via Bash.
+  - event: PreToolUse
+    agent: claudecode
+    tools: ["Bash"]
+    commands: ["git push"]
+    action: deny
+    reason: "git push is blocked by hookmon policy; pushing requires explicit user action outside the agent."
+
 default-action: allow

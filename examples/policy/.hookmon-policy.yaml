@@ -40,5 +40,17 @@ rules:
     action: deny
     reason: ".env files are blocked by hookmon policy; secrets must not be read or edited by the agent."
 
+  # `commands` scopes a rule to Bash calls whose command string contains one
+  # of the given substrings (matched against tool_input.command; not a glob
+  # or regex, so "git push" also catches "git push --force" and "git push
+  # origin main"). An empty/unknown command (e.g. a non-Bash tool) never
+  # matches, same fail-open behavior as `paths`.
+  - event: PreToolUse
+    agent: claudecode
+    tools: ["Bash"]
+    commands: ["git push"]
+    action: deny
+    reason: "git push is blocked by hookmon policy; pushing requires explicit user action outside the agent."
+
 # Applies when no rule above matches. Defaults to "allow" if omitted.
 default-action: allow

@@ -146,6 +146,32 @@ func TestPathMatchesLiteralBasename(t *testing.T) {
 	}
 }
 
+func TestResolveCommandAndToolBothMustMatch(t *testing.T) {
+	cfg := policy.Config{Rules: []policy.Rule{
+		{Event: "PreToolUse", Tools: []string{"Bash"}, Commands: []string{"git push"}, Action: "deny"},
+	}}
+
+	if d := policy.Resolve(cfg, policy.Event{Name: "PreToolUse", Tool: "Bash", Command: "git push origin main"}); d.Action != agent.Deny {
+		t.Fatalf("tool+command match: action = %v, want Deny", d.Action)
+	}
+	if d := policy.Resolve(cfg, policy.Event{Name: "PreToolUse", Tool: "Bash", Command: "git status"}); d.Action != agent.Allow {
+		t.Fatalf("command mismatch: action = %v, want Allow", d.Action)
+	}
+	if d := policy.Resolve(cfg, policy.Event{Name: "PreToolUse", Tool: "Write", Command: "git push"}); d.Action != agent.Allow {
+		t.Fatalf("tool mismatch: action = %v, want Allow", d.Action)
+	}
+}
+
+func TestResolveCommandRuleFallsOpenWhenEventHasNoCommand(t *testing.T) {
+	cfg := policy.Config{Rules: []policy.Rule{
+		{Event: "PreToolUse", Commands: []string{"git push"}, Action: "deny"},
+	}}
+	d := policy.Resolve(cfg, policy.Event{Name: "PreToolUse", Tool: "Bash", Command: ""})
+	if d.Action != agent.Allow {
+		t.Fatalf("action = %v, want Allow (no command to evaluate against)", d.Action)
+	}
+}
+
 func TestParseEventExtractsClaudeCodeFilePath(t *testing.T) {
 	payload := []byte(`{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"/x/.env"}}`)
 	evt := policy.ParseEvent("claudecode", payload)
@@ -165,7 +191,7 @@ func TestParseEventNoFilePathYieldsEmptyPath(t *testing.T) {
 func TestParseEventClaudeCodePayload(t *testing.T) {
 	payload := []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls"}}`)
 	evt := policy.ParseEvent("claudecode", payload)
-	want := policy.Event{Agent: "claudecode", Name: "PreToolUse", Tool: "Bash"}
+	want := policy.Event{Agent: "claudecode", Name: "PreToolUse", Tool: "Bash", Command: "ls"}
 	if evt != want {
 		t.Fatalf("evt = %+v, want %+v", evt, want)
 	}

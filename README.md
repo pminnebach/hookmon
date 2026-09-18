@@ -50,14 +50,15 @@ Point hookmon at it with `--policy-file`, `HOOKMON_POLICY_FILE`, or
 `policy-file:` in `.hookmon.yaml` (default: `.hookmon-policy.yaml` in the
 current directory). Each rule matches a hook `event` name (agent-native
 casing, e.g. `PreToolUse` for Claude Code, `preToolUse` for Cursor),
-optionally scoped to one `agent`, one or more exact `tools`, and/or one or
-more `paths`; `action` is `allow`, `deny`, or `ask`. When several rules
-match, the strictest wins (`deny` > `ask` > `allow`).
+optionally scoped to one `agent`, one or more exact `tools`, one or more
+`paths`, and/or one or more `commands`; `action` is `allow`, `deny`, or
+`ask`. When several rules match, the strictest wins (`deny` > `ask` >
+`allow`).
 
-`tools` and `paths` both AND with the rest of the rule (and with each other)
-— a rule needs every filter it specifies to match. `paths` scopes a rule to
-specific files, e.g. to block reads/writes of `.env` without blocking `Read`/
-`Write` outright:
+`tools`, `paths`, and `commands` all AND with the rest of the rule (and with
+each other) — a rule needs every filter it specifies to match. `paths`
+scopes a rule to specific files, e.g. to block reads/writes of `.env`
+without blocking `Read`/`Write` outright:
 
 ```yaml
 - event: PreToolUse
@@ -76,6 +77,24 @@ caught by `.env`. A pattern ending in `/` (e.g. `.git/`) anchors to a
 directory component instead of the filename. A rule with `paths` set but no
 matching file path in the event (e.g. a `Bash` call, which has no
 `file_path`) simply doesn't match — same fail-open rule as everything else.
+
+`commands` scopes a rule to Bash calls whose command string contains one of
+the given substrings (matched against `tool_input.command`, Claude Code
+only), e.g. to block `git push` without blocking `Bash` outright:
+
+```yaml
+- event: PreToolUse
+  agent: claudecode
+  tools: ["Bash"]
+  commands: ["git push"]
+  action: deny
+  reason: "git push is blocked by hookmon policy."
+```
+
+Matching is a plain substring test, not a glob or regex, so `"git push"`
+also catches `"git push --force"` and `"git push origin main"`. A rule with
+`commands` set but no command in the event (e.g. a non-Bash tool) simply
+doesn't match — same fail-open rule as `paths`.
 
 **Fail-open by design**, matching every other error path in hookmon: a
 missing policy file, a policy file that fails to parse, or a hook/tool that
