@@ -1,8 +1,81 @@
-# Append to examples/policy/.hookmon-policy.yaml.
+# Copy to .hookmon-policy.yaml at your project root (or point --policy-file /
+# HOOKMON_POLICY_FILE at a different path) and check it in — this is meant to
+# be a shared, reviewed policy, not personal config.
 #
-# Insert the four rules below just before the existing `default-action:`
-# line, then add the `judgments:` block after them (top-level, a sibling of
-# `rules:` and `default-action:`).
+# A missing file, a file that fails to parse, or a hook event/tool that
+# matches no rule below all resolve to "allow" (fail-open), same as if no
+# policy were configured at all.
+#
+# Only events with real blocking support in each provider act on this file:
+# Claude Code's PreToolUse, and Cursor's preToolUse, postToolUse,
+# postToolUseFailure, beforeShellExecution, beforeMCPExecution,
+# beforeReadFile, subagentStart, beforeTabFileRead. Rules for other events
+# are parsed but never enforced.
+rules:
+  # Block direct Bash calls from Claude Code; everything else stays allowed.
+  - event: PreToolUse
+    agent: claudecode
+    tools: ["Bash"]
+    action: deny
+    reason: "Direct Bash calls are blocked by hookmon policy; use the approved CI wrapper instead."
+
+  # Same idea for Cursor's shell hook.
+  - event: beforeShellExecution
+    agent: cursor
+    action: deny
+    reason: "Shell execution is blocked by hookmon policy."
+
+  # `paths` scopes a rule to specific files instead of blocking a tool
+  # outright: this only blocks Read/Write when the file path matches one of
+  # the patterns, gitignore-style (a bare pattern like ".env" matches at any
+  # depth, matched against whole path components — never a substring, so a
+  # file like "foo.envelope.txt" is NOT caught by ".env"). Cursor isn't
+  # covered here: it has no "Read"/"Write" tool names (its file hooks are
+  # events like beforeReadFile) and its provider has no blocking-capable
+  # write hook today.
+  - event: PreToolUse
+    agent: claudecode
+    tools: ["Read", "Write"]
+    paths: [".env"]
+    action: deny
+    reason: ".env files are blocked by hookmon policy; secrets must not be read or edited by the agent."
+
+  # `commands` scopes a rule to Bash calls whose command string contains one
+  # of the given substrings (matched against tool_input.command; not a glob
+  # or regex, so "git push" also catches "git push --force" and "git push
+  # origin main"). An empty/unknown command (e.g. a non-Bash tool) never
+  # matches, same fail-open behavior as `paths`.
+  - event: PreToolUse
+    agent: claudecode
+    tools: ["Bash"]
+    commands: ["git push"]
+    action: deny
+    reason: "git push is blocked by hookmon policy; pushing requires explicit user action outside the agent."
+
+  # More examples of commands worth blocking by default in an agentic
+  # coding setup — each is a plain substring match, so these are blunt:
+  # "rm -rf" also catches harmless cleanup like "rm -rf ./build", and
+  # "sudo" also catches read-only uses like "sudo apt list". Adjust to
+  # taste before relying on these. A single rule can list several
+  # `commands` patterns — any one of them matching is enough.
+  - event: PreToolUse
+    agent: claudecode
+    tools: ["Bash"]
+    commands: ["rm -rf", "git reset --hard", "git clean -fd", "sudo"]
+    action: deny
+    reason: "This command is blocked by hookmon policy; it can destroy work or escalate privileges."
+
+  # Blocks the "download a script and pipe it straight into a shell"
+  # pattern (remote code execution), e.g. "curl ... | sh" or
+  # "wget ... | bash". Uses `ask` instead of `deny` since a bare `curl`/
+  # `wget` isn't inherently dangerous — only piping it into a shell is.
+  - event: PreToolUse
+    agent: claudecode
+    tools: ["Bash"]
+    commands: ["curl", "wget"]
+    action: ask
+    reason: "Network downloads via Bash require confirmation; piping into a shell is especially risky."
+
 
   # ---------------------------------------------------------------------
   # Semantic rules. `when:` asks the judgments declared below and compares
@@ -119,3 +192,6 @@ judgments:
       - "Mild: modifies project files in ways that git or a rebuild can undo."
       - "Serious: loses uncommitted work, changes shared state outside the project, or installs software system-wide."
       - "Severe: destroys data with no backup, rewrites published history, exposes credentials, or takes an action outside this machine that cannot be recalled."
+
+# Applies when no rule above matches. Defaults to "allow" if omitted.
+default-action: allow
