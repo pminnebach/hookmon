@@ -1,7 +1,11 @@
 # hookmon's own dogfood policy (see README.md "Blocking tool calls with
 # policy" and examples/policy/.hookmon-policy.yaml for the full schema).
 rules:
-  # Block Claude Code from reading or writing .env files directly.
+  # --- Deterministic rules. These stay exact lookups on purpose. ---
+
+  # Block Claude Code from reading or writing .env files directly. Kept
+  # alongside the exposes_secrets judgment below, not replaced by it: a
+  # known-secret path should not depend on a network call.
   - event: PreToolUse
     agent: claudecode
     tools: ["Read", "Edit", "Write"]
@@ -9,7 +13,12 @@ rules:
     action: deny
     reason: ".env files are blocked by hookmon policy; secrets must not be read or edited by the agent."
 
-  # Block Claude Code from reading or writing .env files directly.
+  # The guard protecting the policy itself must never be probabilistic: a
+  # model-evaluated guard on its own guard fails open on a network blip.
+  #
+  # Known limitation: this pattern matches the basename at any depth, so it
+  # also blocks examples/policy/.hookmon-policy.yaml. The path matcher has
+  # no way to anchor a pattern to the project root.
   - event: PreToolUse
     agent: claudecode
     tools: ["Write", "Edit"]
@@ -17,12 +26,79 @@ rules:
     action: deny
     reason: "Agents should not be able to modify the hookmon policy."
 
-  # Block Claude Code from running `git push` via Bash.
+  # --- Semantic rules. These need HOOKMON_TYPESAFE_API_KEY; without it
+  # they simply never fire, like every other unknown in hookmon. ---
+
+  # Replaces commands: ["git push"], which caught only that exact spelling.
+  # This also covers `git -C . push`, `gh release upload`, `aws s3 cp`, and
+  # `curl -T`, while leaving `git pull` and `git fetch` alone.
   - event: PreToolUse
     agent: claudecode
     tools: ["Bash"]
-    commands: ["git push"]
+    when: { sends_data_off_machine: ">= 0.8" }
     action: deny
-    reason: "git push is blocked by hookmon policy; pushing requires explicit user action outside the agent."
+    reason: "Publishing outside this machine requires explicit user action."
+
+  # No commands: prefilter on purpose — a lexical prefilter would reopen
+  # exactly the bypass this rule closes. `rm -rf ./build` stays allowed;
+  # `rm -r -f ./src` and `/bin/rm -rf src` do not.
+  - event: PreToolUse
+    agent: claudecode
+    tools: ["Bash"]
+    when: { destroys_work: ">= 0.85" }
+    on-error: ask
+    action: deny
+    reason: "This command would irreversibly destroy work. Run it yourself if you meant it."
+
+  # A graded middle ground the substring blocklist could not express.
+  - event: PreToolUse
+    agent: claudecode
+    tools: ["Bash"]
+    when: { destroys_work: ">= 0.5", blast_radius: ">= 2" }
+    action: ask
+    reason: "This command may destroy work — confirm before running."
+
+judgments:
+  destroys_work:
+    type: noul
+    instructions: >
+      Considering `tool_input` as a tool call about to run in the project at
+      `cwd`: would running it irreversibly destroy source code, uncommitted
+      changes, or data that the user could not easily recover?
+    criteria:
+      "true": >
+        It deletes, overwrites, or resets files or history in a way that loses
+        work with no straightforward undo — recursively deleting a source
+        tree, discarding uncommitted changes, or force-overwriting published
+        history.
+      "false": >
+        It is read-only, or it only affects regenerable artifacts such as
+        build output, caches, temporary directories, or installed
+        dependencies.
+
+  sends_data_off_machine:
+    type: noul
+    instructions: >
+      Does `tool_input` publish, push, or upload code or data to a destination
+      outside this machine?
+    criteria:
+      "true": >
+        It sends content to a remote host — pushing to a git remote, uploading
+        to object storage, POSTing a file to a URL, or publishing a package.
+      "false": >
+        It only reads from the network or works locally — cloning, fetching,
+        pulling, installing dependencies, or querying a remote for
+        information.
+
+  blast_radius:
+    type: score
+    instructions: >
+      Rate how much damage this tool call could do if it runs and turns out to
+      be a mistake.
+    criteria:
+      - "None: read-only, or it only changes files the agent itself just created."
+      - "Mild: modifies project files in ways that git or a rebuild can undo."
+      - "Serious: loses uncommitted work, changes shared state outside the project, or installs software system-wide."
+      - "Severe: destroys data with no backup, rewrites published history, exposes credentials, or takes an action outside this machine that cannot be recalled."
 
 default-action: allow
