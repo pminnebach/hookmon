@@ -9,8 +9,11 @@
 package policy
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"strings"
@@ -75,7 +78,20 @@ func Load(path string) (cfg Config, found bool, err error) {
 		return Config{}, false, fmt.Errorf("read policy file %s: %w", path, err)
 	}
 
-	if err := yaml.Unmarshal(b, &cfg); err != nil {
+	// Decode strictly. yaml.Unmarshal ignores unknown fields, which turns a
+	// policy written for a newer hookmon into a silently different policy:
+	// a binary predating `when:` reads a judgment-guarded rule as an
+	// unconditional deny, blocking everything and reporting a reason that
+	// misleads about the cause. Failing the parse instead routes through
+	// this function's fail-open contract, so a version skew allows
+	// everything and says so on stderr.
+	//
+	// This cannot rescue binaries already built — they have no strict
+	// decoding to begin with — so upgrading hookmon before adopting a policy
+	// that uses newer fields is still required.
+	dec := yaml.NewDecoder(bytes.NewReader(b))
+	dec.KnownFields(true)
+	if err := dec.Decode(&cfg); err != nil && !errors.Is(err, io.EOF) {
 		return Config{}, true, fmt.Errorf("parse policy file %s: %w", path, err)
 	}
 	return cfg, true, nil
@@ -134,14 +150,25 @@ func ParseEvent(agentName string, payload []byte) Event {
 	}
 }
 
-// Result carries the outcome of the judgment step. A zero Result means no
-// judgments were obtained, which is what every fail-open path produces.
+// Result carries the outcome of the judgment step. A zero Result means
+// judgments were never attempted, which is what every fail-open path and
+// every judgment-unaware caller produces.
 type Result struct {
 	Answers judge.Answers
-	// Err is set when the judgment step failed as a whole (no API key,
-	// network error, timeout, non-2xx). Rules with a When clause then take
+	// Err is set when a judgment step that did run failed as a whole
+	// (network error, timeout, non-2xx). Rules with a When clause then take
 	// their OnError action.
 	Err error
+	// Attempted reports that the judgment step actually ran for this event.
+	//
+	// False means judgments are not configured at all — no API key, or a
+	// caller like Resolve that supplies none — and When clauses are then
+	// inert: OnError does not apply. OnError exists for a configured
+	// judgment failing at runtime, not for the absence of one. Without this
+	// distinction, a policy carrying `on-error: ask` would prompt on every
+	// matching call for any teammate who has no key, making a shared policy
+	// unusable.
+	Attempted bool
 }
 
 // Outcome is a resolved decision plus the provenance needed to log and tune
@@ -211,6 +238,12 @@ func ruleAction(r Rule, res Result) (agent.Action, hit, bool) {
 	if len(r.When) == 0 {
 		return parseAction(r.Action), hit{}, true
 	}
+	if !res.Attempted {
+		// Judgments are not configured, so this rule has nothing to say.
+		// Deliberately not the on-error path: see Result.Attempted.
+		return agent.Allow, hit{}, false
+	}
+
 	ok, h, err := evalWhen(r.When, res.Answers)
 	switch {
 	case err != nil || res.Err != nil:

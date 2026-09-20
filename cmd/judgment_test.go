@@ -279,3 +279,74 @@ rules:
 		t.Fatalf("file_path was not sent, so the judgment had nothing to go on:\n%s", body)
 	}
 }
+
+// onErrorAskPolicy carries on-error: ask, so it distinguishes "judgments
+// aren't configured" (rule inert) from "a configured judgment failed"
+// (degrade to a prompt).
+const onErrorAskPolicy = `
+judgments:
+  destroys_work:
+    type: noul
+    instructions: "Would this irreversibly destroy work?"
+rules:
+  - event: PreToolUse
+    tools: ["Bash"]
+    when: {destroys_work: ">= 0.85"}
+    on-error: ask
+    action: deny
+    reason: "Could not verify this command."
+default-action: allow
+`
+
+// With no API key, on-error must NOT fire: a shared policy would otherwise
+// prompt on every matching call for any teammate without a key.
+func TestRootCmdNoAPIKeyDoesNotTriggerOnError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("TypeSafe was called with no API key configured")
+	}))
+	defer srv.Close()
+
+	stdout, stderr := runHook(t, writePolicy(t, onErrorAskPolicy), srv.URL, "")
+
+	if stdout != "{}\n" {
+		t.Fatalf("stdout = %q, want an allow (not an ask)", stdout)
+	}
+	if !strings.Contains(stderr, "HOOKMON_TYPESAFE_API_KEY") {
+		t.Fatalf("stderr = %q, want it to still warn", stderr)
+	}
+}
+
+// But once a key IS set, a real failure must still degrade to ask.
+func TestRootCmdConfiguredFailureTriggersOnError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	stdout, _ := runHook(t, writePolicy(t, onErrorAskPolicy), srv.URL, "test-key")
+
+	if !strings.Contains(stdout, `"permissionDecision":"ask"`) {
+		t.Fatalf("stdout = %q, want an ask", stdout)
+	}
+}
+
+// A policy field this binary doesn't know must disable the policy and warn,
+// not silently reinterpret it as a different, broader rule.
+func TestRootCmdUnknownPolicyFieldFailsOpen(t *testing.T) {
+	policyPath := writePolicy(t, `
+rules:
+  - event: PreToolUse
+    tools: ["Bash"]
+    from_a_newer_hookmon: {x: 1}
+    action: deny
+    reason: "would block everything if the field were ignored"
+`)
+	stdout, stderr := runHook(t, policyPath, "http://127.0.0.1:1", "")
+
+	if stdout != "{}\n" {
+		t.Fatalf("stdout = %q, want fail-open allow", stdout)
+	}
+	if !strings.Contains(stderr, "policy") {
+		t.Fatalf("stderr = %q, want a policy parse warning", stderr)
+	}
+}

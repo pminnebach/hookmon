@@ -228,7 +228,7 @@ file. `~/.hookmon.yaml` works too; `chmod 600` it.
 | `HOOKMON_TYPESAFE_API_KEY` | *(none, by design)* | unset — judgments never fire |
 | `HOOKMON_TYPESAFE_ENDPOINT` | *(none)* | `https://api.typesafe.ai/v1/systemone` |
 | `HOOKMON_TYPESAFE_MODEL` | `--typesafe-model` | `jev-latest` |
-| `HOOKMON_TYPESAFE_TIMEOUT` | `--typesafe-timeout` | `1.5s` |
+| `HOOKMON_TYPESAFE_TIMEOUT` | `--typesafe-timeout` | `3s` |
 | `HOOKMON_TYPESAFE_CACHE_TTL` | `--typesafe-cache-ttl` | `24h` |
 | `HOOKMON_TYPESAFE_CACHE_DIR` | `--typesafe-cache-dir` | user cache dir |
 | `HOOKMON_TYPESAFE_SEND_CONTENT` | `--typesafe-send-content` | `false` |
@@ -247,7 +247,13 @@ lifts this if you want it; leave it off unless you have a reason.
 
 ### When judgments fail
 
-A missing API key, a network error, a timeout, a non-2xx response, or a
+**If no API key is set, judgments are not configured**, and every `when:`
+rule simply goes inert — `on-error` does *not* apply. Without that
+distinction a shared policy carrying `on-error: ask` would prompt on every
+matching call for any teammate who has no key. hookmon still warns on stderr,
+because a policy that expects judgments is not being enforced.
+
+Once a key *is* set, a network error, a timeout, a non-2xx response, or a
 missing answer all mean the `when:` clause **could not be evaluated**. The
 rule then takes its `on-error` action:
 
@@ -261,8 +267,36 @@ trade-off honestly: with the default `allow`, a network blip silently stops a
 `deny` rule from protecting anything. Use `on-error: ask` on the rules where
 that matters.
 
-`on-error` applies **only** when the clause was unevaluable — never when an
-answer arrived and simply fell below the threshold.
+`on-error` applies **only** when a configured judgment was unevaluable —
+never when judgments aren't configured at all, and never when an answer
+arrived and simply fell below the threshold.
+
+### Upgrade the binary before the policy
+
+Policy files are decoded strictly: a field this binary doesn't recognize
+fails the parse, and hookmon then falls open (allows everything) with a
+warning, rather than enforcing a policy it only partly understands.
+
+That matters because **older hookmon binaries ignore unknown fields
+silently**. A binary predating `when:` reads
+
+```yaml
+- tools: ["Bash"]
+  when: { destroys_work: ">= 0.85" }   # invisible to it
+  action: deny
+```
+
+as an unconditional deny of every Bash call — fail-*closed*, with a reason
+string that misleads about the cause. Strict decoding prevents the next
+version of this problem but cannot fix binaries already built, so when you
+adopt a policy that uses newer fields, **rebuild and redeploy hookmon
+first**. The checked-in `hookmon` binary is gitignored; each machine builds
+its own, so a stale one is easy to miss.
+
+One consequence worth knowing: a typo like `tool:` for `tools:` now disables
+the whole policy (loudly) instead of silently creating an over-broad rule.
+That is the safer direction, but it does mean a typo costs you enforcement
+rather than quietly changing it.
 
 ### Tuning thresholds
 

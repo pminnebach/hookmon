@@ -2,6 +2,8 @@ package policy_test
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"hookmon/agent"
@@ -32,7 +34,7 @@ func TestResolveWithNoulAboveThresholdDenies(t *testing.T) {
 		When:   map[string]string{"destroys_work": ">= 0.85"},
 		Action: "deny", Reason: "destroys work",
 	})
-	res := policy.Result{Answers: judge.Answers{
+	res := policy.Result{Attempted: true, Answers: judge.Answers{
 		"destroys_work": {Type: judge.TypeNoul, Noul: 0.92},
 	}}
 
@@ -50,7 +52,7 @@ func TestResolveWithNoulBelowThresholdAllows(t *testing.T) {
 		Event: "PreToolUse", Tools: []string{"Bash"},
 		When: map[string]string{"destroys_work": ">= 0.85"}, Action: "deny",
 	})
-	res := policy.Result{Answers: judge.Answers{
+	res := policy.Result{Attempted: true, Answers: judge.Answers{
 		"destroys_work": {Type: judge.TypeNoul, Noul: 0.12},
 	}}
 
@@ -67,7 +69,7 @@ func TestResolveWithLowNoulAllowsHarmlessCleanup(t *testing.T) {
 		When: map[string]string{"destroys_work": ">= 0.85"}, Action: "deny",
 	})
 	evt := policy.Event{Name: "PreToolUse", Tool: "Bash", Command: "rm -rf ./build"}
-	res := policy.Result{Answers: judge.Answers{
+	res := policy.Result{Attempted: true, Answers: judge.Answers{
 		"destroys_work": {Type: judge.TypeNoul, Noul: 0.04},
 	}}
 
@@ -82,12 +84,12 @@ func TestResolveWithScoreLevelThreshold(t *testing.T) {
 	})
 	answers := judge.Answers{"blast_radius": {Type: judge.TypeScore, Score: 1.6}}
 
-	if out := policy.ResolveWith(cfg, bashEvent(), policy.Result{Answers: answers}); out.Action != agent.Allow {
+	if out := policy.ResolveWith(cfg, bashEvent(), policy.Result{Attempted: true, Answers: answers}); out.Action != agent.Allow {
 		t.Fatalf("score 1.6 vs >= 2: action = %v, want Allow", out.Action)
 	}
 
 	answers["blast_radius"] = judge.Answer{Type: judge.TypeScore, Score: 2.4}
-	if out := policy.ResolveWith(cfg, bashEvent(), policy.Result{Answers: answers}); out.Action != agent.Deny {
+	if out := policy.ResolveWith(cfg, bashEvent(), policy.Result{Attempted: true, Answers: answers}); out.Action != agent.Deny {
 		t.Fatalf("score 2.4 vs >= 2: action = %v, want Deny", out.Action)
 	}
 }
@@ -103,7 +105,7 @@ func TestResolveWithChoiceEqualityAndConfidence(t *testing.T) {
 	})
 
 	// Right choice, confidence below the floor: must not fire.
-	res := policy.Result{Answers: judge.Answers{
+	res := policy.Result{Attempted: true, Answers: judge.Answers{
 		"destination": {Type: judge.TypeChoice, Choice: "shared", Confidence: 0.4},
 	}}
 	if out := policy.ResolveWith(cfg, bashEvent(), res); out.Action != agent.Allow {
@@ -120,22 +122,56 @@ func TestResolveWithMissingAnswerDoesNotFire(t *testing.T) {
 	cfg := judgedConfig(policy.Rule{
 		Event: "PreToolUse", When: map[string]string{"destroys_work": ">= 0.5"}, Action: "deny",
 	})
-	res := policy.Result{Answers: judge.Answers{}}
+	res := policy.Result{Attempted: true, Answers: judge.Answers{}}
 
 	if out := policy.ResolveWith(cfg, bashEvent(), res); out.Action != agent.Allow {
 		t.Fatalf("action = %v, want Allow", out.Action)
 	}
 }
 
-// The plain Resolve entry point supplies no answers, so every when: rule
-// must fall back to on-error — which is how all the pre-judgment tests keep
-// passing untouched.
+// The plain Resolve entry point never attempts judgments, so every when:
+// rule is inert — which is how all the pre-judgment tests keep passing
+// untouched.
 func TestResolveWithoutAnswersSkipsWhenRules(t *testing.T) {
 	cfg := judgedConfig(policy.Rule{
 		Event: "PreToolUse", When: map[string]string{"destroys_work": ">= 0.5"}, Action: "deny",
 	})
 	if d := policy.Resolve(cfg, bashEvent()); d.Action != agent.Allow {
 		t.Fatalf("action = %v, want Allow", d.Action)
+	}
+}
+
+// When judgments aren't configured at all, on-error must NOT apply: it
+// exists for a configured judgment failing at runtime. Otherwise a shared
+// policy carrying `on-error: ask` would prompt on every matching call for
+// any teammate without an API key.
+func TestResolveUnconfiguredJudgmentsIgnoreOnError(t *testing.T) {
+	for _, onErr := range []string{"ask", "deny"} {
+		cfg := judgedConfig(policy.Rule{
+			Event: "PreToolUse", Tools: []string{"Bash"},
+			When:    map[string]string{"destroys_work": ">= 0.85"},
+			OnError: onErr, Action: "deny",
+		})
+		// Attempted is false: no key, so the judgment step never ran.
+		out := policy.ResolveWith(cfg, bashEvent(), policy.Result{})
+		if out.Action != agent.Allow {
+			t.Errorf("on-error %q unconfigured: action = %v, want Allow", onErr, out.Action)
+		}
+	}
+}
+
+// The mirror image: once judgments ARE configured, a runtime failure must
+// still reach on-error.
+func TestResolveConfiguredFailureStillUsesOnError(t *testing.T) {
+	cfg := judgedConfig(policy.Rule{
+		Event: "PreToolUse", Tools: []string{"Bash"},
+		When:    map[string]string{"destroys_work": ">= 0.85"},
+		OnError: "deny", Action: "deny",
+	})
+	res := policy.Result{Attempted: true, Err: errors.New("timeout")}
+
+	if out := policy.ResolveWith(cfg, bashEvent(), res); out.Action != agent.Deny {
+		t.Fatalf("action = %v, want Deny", out.Action)
 	}
 }
 
@@ -147,7 +183,7 @@ func TestResolveWithWhenAndsWithCommands(t *testing.T) {
 		Event: "PreToolUse", Tools: []string{"Bash"}, Commands: []string{"git push"},
 		When: map[string]string{"destroys_work": ">= 0.5"}, Action: "deny",
 	})
-	res := policy.Result{Answers: judge.Answers{
+	res := policy.Result{Attempted: true, Answers: judge.Answers{
 		"destroys_work": {Type: judge.TypeNoul, Noul: 0.99},
 	}}
 
@@ -162,7 +198,7 @@ func TestResolveWithOnErrorAskOnJudgmentFailure(t *testing.T) {
 		When:    map[string]string{"destroys_work": ">= 0.85"},
 		OnError: "ask", Action: "deny", Reason: "unverified",
 	})
-	res := policy.Result{Err: errors.New("network down")}
+	res := policy.Result{Attempted: true, Err: errors.New("network down")}
 
 	out := policy.ResolveWith(cfg, bashEvent(), res)
 	if out.Action != agent.Ask {
@@ -175,7 +211,7 @@ func TestResolveWithOnErrorDefaultsToAllow(t *testing.T) {
 		Event: "PreToolUse", Tools: []string{"Bash"},
 		When: map[string]string{"destroys_work": ">= 0.85"}, Action: "deny",
 	})
-	res := policy.Result{Err: errors.New("network down")}
+	res := policy.Result{Attempted: true, Err: errors.New("network down")}
 
 	if out := policy.ResolveWith(cfg, bashEvent(), res); out.Action != agent.Allow {
 		t.Fatalf("action = %v, want Allow", out.Action)
@@ -190,7 +226,7 @@ func TestResolveWithOnErrorIgnoredWhenAnswerBelowThreshold(t *testing.T) {
 		When:    map[string]string{"destroys_work": ">= 0.85"},
 		OnError: "deny", Action: "deny",
 	})
-	res := policy.Result{Answers: judge.Answers{
+	res := policy.Result{Attempted: true, Answers: judge.Answers{
 		"destroys_work": {Type: judge.TypeNoul, Noul: 0.02},
 	}}
 
@@ -205,7 +241,7 @@ func TestResolveWithConfidenceOnNoulIsUnevaluable(t *testing.T) {
 		When:   map[string]string{"destroys_work.confidence": ">= 0.5"},
 		Action: "deny",
 	})
-	res := policy.Result{Answers: judge.Answers{
+	res := policy.Result{Attempted: true, Answers: judge.Answers{
 		"destroys_work": {Type: judge.TypeNoul, Noul: 0.99},
 	}}
 
@@ -223,7 +259,7 @@ func TestResolveWithAllWhenConditionsMustHold(t *testing.T) {
 		},
 		Action: "deny",
 	})
-	res := policy.Result{Answers: judge.Answers{
+	res := policy.Result{Attempted: true, Answers: judge.Answers{
 		"destroys_work": {Type: judge.TypeNoul, Noul: 0.92},
 		"blast_radius":  {Type: judge.TypeScore, Score: 1.0},
 	}}
@@ -318,5 +354,71 @@ func TestValidateAcceptsAGoodConfig(t *testing.T) {
 	})
 	if errs := cfg.Validate(); len(errs) != 0 {
 		t.Fatalf("errs = %v, want none", errs)
+	}
+}
+
+// An unknown field must fail the parse rather than being ignored. Silently
+// dropping it turns a policy written for a newer hookmon into a different
+// policy: a binary predating `when:` would read a judgment-guarded rule as
+// an unconditional deny. Load's error contract is fail-open, so a version
+// skew allows everything and says so.
+func TestLoadRejectsUnknownFields(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "policy.yaml")
+	body := "rules:\n  - event: PreToolUse\n    tools: [\"Bash\"]\n    not_a_real_field: 1\n    action: deny\n"
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, found, err := policy.Load(p)
+	if !found {
+		t.Fatal("found = false, want true")
+	}
+	if err == nil {
+		t.Fatal("err = nil, want a parse error naming the unknown field")
+	}
+	if len(cfg.Rules) != 0 {
+		t.Fatalf("cfg = %+v, want the zero Config so callers fail open", cfg)
+	}
+}
+
+// A policy using only fields this binary knows must still load cleanly.
+func TestLoadAcceptsEveryKnownField(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "policy.yaml")
+	body := `judgments:
+  destroys_work:
+    type: noul
+    instructions: "q"
+    criteria: {"true": "a", "false": "b"}
+  blast_radius:
+    type: score
+    instructions: "q"
+    criteria: ["a", "b"]
+rules:
+  - event: PreToolUse
+    agent: claudecode
+    tools: ["Bash"]
+    paths: [".env"]
+    commands: ["npm publish"]
+    when: {destroys_work: ">= 0.85"}
+    on-error: ask
+    action: deny
+    reason: "r"
+default-action: allow
+`
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, _, err := policy.Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Rules) != 1 || len(cfg.Judgments) != 2 {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+	if errs := cfg.Validate(); len(errs) != 0 {
+		t.Fatalf("Validate: %v", errs)
 	}
 }

@@ -16,7 +16,15 @@ import (
 const (
 	DefaultEndpoint = "https://api.typesafe.ai/v1/systemone"
 	DefaultModel    = "jev-latest"
-	DefaultTimeout  = 1500 * time.Millisecond
+
+	// DefaultTimeout is a ceiling, not an expected cost, so it is set well
+	// above observed latency rather than close to it. Measured cold calls
+	// from a hook run 582-884ms against a documented ~100ms: every hook is a
+	// fresh process, so each call pays DNS, TLS and connection setup with no
+	// pooling or session reuse. A deadline near that range would make rules
+	// stop enforcing under ordinary load, and because on-error defaults to
+	// allow, they would stop silently.
+	DefaultTimeout = 3 * time.Second
 )
 
 // Errors callers may want to distinguish when writing the stderr warning.

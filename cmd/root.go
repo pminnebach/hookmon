@@ -197,11 +197,16 @@ func runJudgments(cmd *cobra.Command, cfg config, policyCfg policy.Config, evt p
 		// every judgment rule off at once is the highest-consequence
 		// failure here, so it needs to be loud.
 		fmt.Fprintf(cmd.ErrOrStderr(), "hookmon: judge: %v (%d judgment(s) not evaluated)\n", err, len(questions))
-		return policy.Result{Err: err}
+		return policy.Result{Err: err, Attempted: true}
 	}
 
 	if cfg.TypeSafeAPIKey == "" {
-		return warn(judge.ErrNoAPIKey)
+		// Not Attempted: judgments aren't configured on this machine, so
+		// when: rules go inert rather than falling to on-error. Still warn,
+		// because a policy that expects judgments is not being enforced.
+		fmt.Fprintf(cmd.ErrOrStderr(), "hookmon: judge: %v (%d judgment(s) not evaluated)\n",
+			judge.ErrNoAPIKey, len(questions))
+		return policy.Result{}
 	}
 
 	timeout := cfg.TypeSafeTimeout
@@ -237,7 +242,7 @@ func runJudgments(cmd *cobra.Command, cfg config, policyCfg policy.Config, evt p
 	if err != nil {
 		return warn(err)
 	}
-	return policy.Result{Answers: answers}
+	return policy.Result{Answers: answers, Attempted: true}
 }
 
 // cacheDir resolves the judgment cache directory. It deliberately defaults
