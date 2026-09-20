@@ -127,6 +127,175 @@ read-only uses like `"sudo apt list"`. See
 [examples/policy/.hookmon-policy.yaml](examples/policy/.hookmon-policy.yaml)
 for the full versions of these rules.
 
+## Semantic rules with `when:`
+
+Substring and glob matching can only enumerate spellings, never state a
+condition. `commands: ["rm -rf"]` blocks harmless `rm -rf ./build` and misses
+`rm -r -f ./src`, `/bin/rm -rf src`, and anything through `eval`. A `when:`
+clause asks what the call would actually *do*:
+
+```yaml
+judgments:
+  destroys_work:
+    type: noul
+    instructions: >
+      Would running this irreversibly destroy source code, uncommitted
+      changes, or data the user could not easily recover?
+    criteria:
+      "true": "It loses work with no straightforward undo."
+      "false": "It only affects regenerable artifacts — build output, caches, dependencies."
+
+rules:
+  - event: PreToolUse
+    tools: ["Bash"]
+    when: { destroys_work: ">= 0.85" }
+    on-error: ask
+    action: deny
+    reason: "This command would irreversibly destroy work."
+```
+
+Judgments are answered by [TypeSafe](https://typesafe.ai)'s System One model,
+which returns a typed probability rather than generated text. Code keeps
+everything deterministic — event, agent and tool matching, rule precedence,
+thresholds, and the fail-open contract; the model supplies only the semantic
+judgment about the unstructured command or path.
+
+### Declaring judgments
+
+Each entry under `judgments:` has a `type`, `instructions`, and optional
+`criteria`:
+
+| Type | Answers with | `criteria` shape |
+| --- | --- | --- |
+| `noul` | a probability from 0 to 1 | optional map: `{"true": …, "false": …}` |
+| `choice` | one of your options | map of option name to description |
+| `score` | a position along ordered levels | ordered list, one description per level |
+
+Write one narrow judgment per question, and make each criterion describe a
+concrete situation that stands on its own.
+
+### Thresholds
+
+`when:` maps a judgment to a condition. Every entry must hold (AND):
+
+```yaml
+when:
+  destroys_work: ">= 0.85"     # noul probability
+  blast_radius: ">= 2"         # score level
+  destination: "== shared"     # choice option
+  destination.confidence: ">= 0.6"
+```
+
+Operators are `>=`, `>`, `<=`, `<`, `==`, `!=`. A bare number means `>=` and a
+bare word means `==`, so `destroys_work: 0.85` works unquoted. A
+`.confidence` suffix reads how concentrated a choice or score answer was;
+`noul` answers have no confidence, because the probability *is* the signal.
+
+Because `when:` ANDs with `event`/`agent`/`tools`/`paths`/`commands`, adding a
+judgment to an existing rule can only ever make it fire **less** often. That
+makes narrowing a blunt rule with a judgment a strictly safe edit: it can
+remove false positives, but it can never introduce a block that wasn't
+already there. To express OR, write two rules.
+
+### What it costs
+
+hookmon first works out which rules match *lexically*, then asks only the
+judgments those rules reference — all of them in a single request, since
+System One evaluates questions in parallel. **If no matching rule has a
+`when:` clause, no network call is made at all**, so a policy that uses only
+`commands:`/`paths:` is exactly as fast as before.
+
+Answers are cached on disk (default: 24h, in your user cache directory), so
+the commands an agent repeats all day — `go build`, `git status` — are judged
+once. Set `--typesafe-cache-ttl 0` to disable.
+
+### Configuration
+
+Set your API key as an **environment variable**, never as a flag and never in
+the policy file:
+
+```bash
+export HOOKMON_TYPESAFE_API_KEY=...
+```
+
+The policy file is meant to be checked in and shared, and the hook command
+line lives in `.claude/settings.json`, which is also checked in — a key in
+either would be committed. hookmon never reads an API key from the policy
+file. `~/.hookmon.yaml` works too; `chmod 600` it.
+
+| Setting | Flag | Default |
+| --- | --- | --- |
+| `HOOKMON_TYPESAFE_API_KEY` | *(none, by design)* | unset — judgments never fire |
+| `HOOKMON_TYPESAFE_ENDPOINT` | *(none)* | `https://api.typesafe.ai/v1/systemone` |
+| `HOOKMON_TYPESAFE_MODEL` | `--typesafe-model` | `jev-latest` |
+| `HOOKMON_TYPESAFE_TIMEOUT` | `--typesafe-timeout` | `1.5s` |
+| `HOOKMON_TYPESAFE_CACHE_TTL` | `--typesafe-cache-ttl` | `24h` |
+| `HOOKMON_TYPESAFE_CACHE_DIR` | `--typesafe-cache-dir` | user cache dir |
+| `HOOKMON_TYPESAFE_SEND_CONTENT` | `--typesafe-send-content` | `false` |
+
+### What leaves your machine
+
+This is the one part of hookmon that talks to a third party, and only for
+events that a `when:` rule already matched. hookmon sends the agent name, the
+event name, the tool name, `cwd`, and the tool's `tool_input`.
+
+**File and message content is stripped first.** The `content`, `new_string`,
+`old_string`, `edits`, and `plan` fields are dropped, and every remaining
+string is truncated. A `Write` to `.env` sends the *path*, never the secret —
+judging what a call does needs the target, not the payload. `--typesafe-send-content`
+lifts this if you want it; leave it off unless you have a reason.
+
+### When judgments fail
+
+A missing API key, a network error, a timeout, a non-2xx response, or a
+missing answer all mean the `when:` clause **could not be evaluated**. The
+rule then takes its `on-error` action:
+
+- `allow` (the default) — the rule does not fire, exactly like a missing
+  policy file. Fail-open, consistent with the rest of hookmon.
+- `ask` — degrade to a confirmation prompt.
+- `deny` — block.
+
+hookmon always warns on stderr naming the judgments it skipped. Note the
+trade-off honestly: with the default `allow`, a network blip silently stops a
+`deny` rule from protecting anything. Use `on-error: ask` on the rules where
+that matters.
+
+`on-error` applies **only** when the clause was unevaluable — never when an
+answer arrived and simply fell below the threshold.
+
+### Tuning thresholds
+
+Every `deny` written to `--policy-log-file` records the judgment that fired
+and its value:
+
+```json
+{
+  "command": "rm -r -f ./src",
+  "action": "deny",
+  "reason": "This command would irreversibly destroy work.",
+  "judgment": "destroys_work",
+  "judgment_value": 0.92,
+  "judgment_condition": ">= 0.85"
+}
+```
+
+Thresholds are an application decision, not something to inherit from an
+example. Pick them against your own traffic.
+
+### What should stay deterministic
+
+A judgment narrows a blunt rule; it is not a sole line of defense. Keep exact
+lookups in code:
+
+- **The rule protecting the policy file itself.** A model-evaluated guard on
+  its own guard fails open on a network blip.
+- **Known-secret paths.** Keep `paths: [".env"]` as a deterministic rule
+  alongside any `exposes_secrets` judgment — belt and braces.
+- **Event, agent, and tool names.** Never probabilistic.
+- **Anything where fail-open is unacceptable.** If "the network was down, so
+  the rule didn't fire" is not survivable, that rule cannot have a `when:`.
+
 **Fail-open by design**, matching every other error path in hookmon: a
 missing policy file, a policy file that fails to parse, or a hook/tool that
 matches no rule all behave exactly like no policy being configured at all —

@@ -8,15 +8,26 @@ import (
 
 // PolicyDecision is a structured record of a single denied hook event,
 // written to cfg.PolicyLogFile.
+// Judgment, JudgmentValue and JudgmentCondition record the semantic answer
+// that fired the rule, when one did, so thresholds can be tuned against real
+// traffic rather than guessed. JudgmentValue carries no omitempty on
+// purpose: a legitimate 0.0 is the most informative value there is when
+// chasing a false positive, and omitempty would drop it.
+//
+// These are scalars rather than a slice so PolicyDecision stays comparable
+// with ==, which the tests rely on.
 type PolicyDecision struct {
-	Time    string `json:"time"`
-	Agent   string `json:"agent"`
-	Event   string `json:"event"`
-	Tool    string `json:"tool"`
-	Path    string `json:"path"`
-	Command string `json:"command"`
-	Action  string `json:"action"`
-	Reason  string `json:"reason"`
+	Time              string  `json:"time"`
+	Agent             string  `json:"agent"`
+	Event             string  `json:"event"`
+	Tool              string  `json:"tool"`
+	Path              string  `json:"path"`
+	Command           string  `json:"command"`
+	Action            string  `json:"action"`
+	Reason            string  `json:"reason"`
+	Judgment          string  `json:"judgment,omitempty"`
+	JudgmentValue     float64 `json:"judgment_value"`
+	JudgmentCondition string  `json:"judgment_condition,omitempty"`
 }
 
 // LogPolicyDecision appends d to cfg.PolicyLogFile. If cfg.PolicyLogFile is

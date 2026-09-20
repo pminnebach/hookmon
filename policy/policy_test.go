@@ -191,7 +191,10 @@ func TestParseEventNoFilePathYieldsEmptyPath(t *testing.T) {
 func TestParseEventClaudeCodePayload(t *testing.T) {
 	payload := []byte(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls"}}`)
 	evt := policy.ParseEvent("claudecode", payload)
-	want := policy.Event{Agent: "claudecode", Name: "PreToolUse", Tool: "Bash", Command: "ls"}
+	want := policy.Event{
+		Agent: "claudecode", Name: "PreToolUse", Tool: "Bash", Command: "ls",
+		ToolInput: `{"command":"ls"}`,
+	}
 	if evt != want {
 		t.Fatalf("evt = %+v, want %+v", evt, want)
 	}

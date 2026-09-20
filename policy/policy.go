@@ -18,26 +18,43 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"hookmon/agent"
+	"hookmon/judge"
 )
 
 // Rule matches a hook event (optionally scoped to one agent, one or more
 // exact tool names, one or more file path patterns, and one or more command
 // substrings) and states the action to take when it matches. Tools, Paths,
-// and Commands each AND with the rest of the rule; an empty Tools, Paths, or
-// Commands list means that filter is trivially satisfied.
+// Commands, and When each AND with the rest of the rule; an empty Tools,
+// Paths, Commands, or When means that filter is trivially satisfied.
+//
+// Because When ANDs rather than ORs, adding a judgment to an existing rule
+// can only ever make it fire less often. That makes "narrow this blunt rule
+// with a judgment" a strictly safe edit: it can reduce false positives, but
+// it can never introduce a block that wasn't already there.
 type Rule struct {
 	Event    string   `yaml:"event"`
 	Agent    string   `yaml:"agent,omitempty"`
 	Tools    []string `yaml:"tools,omitempty"`
 	Paths    []string `yaml:"paths,omitempty"`
 	Commands []string `yaml:"commands,omitempty"`
-	Action   string   `yaml:"action"`
-	Reason   string   `yaml:"reason,omitempty"`
+	// When maps judgment IDs (optionally suffixed ".confidence") to the
+	// condition each must satisfy, e.g. {"destroys_work": ">= 0.85"}.
+	When map[string]string `yaml:"when,omitempty"`
+	// OnError is the action this rule contributes when its When clause
+	// cannot be evaluated — no API key, a network failure, a timeout, or a
+	// missing answer. "allow" (the default) means the rule simply does not
+	// fire, matching every other fail-open path in hookmon.
+	OnError string `yaml:"on-error,omitempty"`
+	Action  string `yaml:"action"`
+	Reason  string `yaml:"reason,omitempty"`
 }
 
 // Config is the parsed contents of a policy file.
 type Config struct {
 	Rules []Rule `yaml:"rules"`
+	// Judgments declares the semantic questions rules may reference from a
+	// When clause. Declared once here, asked once per hook event.
+	Judgments map[string]judge.Question `yaml:"judgments,omitempty"`
 	// DefaultAction applies when no rule matches. Empty means "allow".
 	DefaultAction string `yaml:"default-action,omitempty"`
 }
@@ -71,12 +88,17 @@ func Load(path string) (cfg Config, found bool, err error) {
 // and tool_input.command respectively); an agent without a known field
 // simply yields an empty Path/Command, which never matches a rule's Paths or
 // Commands filter.
+// ToolInput carries the whole raw tool_input as JSON text, for judgments.
+// It is a string rather than a json.RawMessage so that Event stays
+// comparable with ==, which the tests rely on.
 type Event struct {
-	Agent   string
-	Name    string
-	Tool    string
-	Path    string
-	Command string
+	Agent     string
+	Name      string
+	Tool      string
+	Path      string
+	Command   string
+	Cwd       string
+	ToolInput string
 }
 
 // ParseEvent extracts the fields policy needs from a raw hook payload.
@@ -84,41 +106,123 @@ type Event struct {
 // values, which match no rule and therefore fall open to Resolve's default.
 func ParseEvent(agentName string, payload []byte) Event {
 	var fields struct {
-		HookEventName string `json:"hook_event_name"`
-		ToolName      string `json:"tool_name"`
-		ToolInput     struct {
-			FilePath string `json:"file_path"`
-			Command  string `json:"command"`
-		} `json:"tool_input"`
+		HookEventName string          `json:"hook_event_name"`
+		ToolName      string          `json:"tool_name"`
+		Cwd           string          `json:"cwd"`
+		ToolInput     json.RawMessage `json:"tool_input"`
 	}
 	_ = json.Unmarshal(payload, &fields)
+
+	// Path and Command keep their own narrow decode so the lexical filters
+	// behave byte-identically to before ToolInput existed.
+	var input struct {
+		FilePath string `json:"file_path"`
+		Command  string `json:"command"`
+	}
+	if len(fields.ToolInput) > 0 {
+		_ = json.Unmarshal(fields.ToolInput, &input)
+	}
+
 	return Event{
-		Agent:   agentName,
-		Name:    fields.HookEventName,
-		Tool:    fields.ToolName,
-		Path:    fields.ToolInput.FilePath,
-		Command: fields.ToolInput.Command,
+		Agent:     agentName,
+		Name:      fields.HookEventName,
+		Tool:      fields.ToolName,
+		Path:      input.FilePath,
+		Command:   input.Command,
+		Cwd:       fields.Cwd,
+		ToolInput: string(fields.ToolInput),
 	}
 }
 
-// Resolve evaluates every rule in cfg against evt and returns the resulting
-// Decision. When multiple rules match, Deny takes precedence over Ask, which
-// takes precedence over Allow — the same precedence Claude Code itself
-// documents for multiple PreToolUse hooks. When no rule matches, cfg.
-// DefaultAction applies (allow if unset).
+// Result carries the outcome of the judgment step. A zero Result means no
+// judgments were obtained, which is what every fail-open path produces.
+type Result struct {
+	Answers judge.Answers
+	// Err is set when the judgment step failed as a whole (no API key,
+	// network error, timeout, non-2xx). Rules with a When clause then take
+	// their OnError action.
+	Err error
+}
+
+// Outcome is a resolved decision plus the provenance needed to log and tune
+// it. It embeds agent.Decision, so Action and Reason read through directly.
+type Outcome struct {
+	agent.Decision
+	// Judgment, Value and Condition describe the answer that satisfied the
+	// winning rule's When clause, when one did.
+	Judgment  string
+	Value     float64
+	Condition string
+}
+
+// Resolve evaluates every rule in cfg against evt, without judgments. Rules
+// carrying a When clause take their OnError action, which by default means
+// they do not fire.
 func Resolve(cfg Config, evt Event) agent.Decision {
-	best := agent.Decision{Action: parseAction(cfg.DefaultAction)}
+	return ResolveWith(cfg, evt, Result{}).Decision
+}
+
+// ResolveWith evaluates every rule in cfg against evt and returns the
+// resulting Outcome. When multiple rules match, Deny takes precedence over
+// Ask, which takes precedence over Allow — the same precedence Claude Code
+// itself documents for multiple PreToolUse hooks. When no rule matches,
+// cfg.DefaultAction applies (allow if unset).
+func ResolveWith(cfg Config, evt Event, res Result) Outcome {
+	best := Outcome{Decision: agent.Decision{Action: parseAction(cfg.DefaultAction)}}
 
 	for _, r := range cfg.Rules {
 		if !ruleMatches(r, evt) {
 			continue
 		}
-		action := parseAction(r.Action)
-		if action > best.Action {
-			best = agent.Decision{Action: action, Reason: r.Reason}
+		action, h, fires := ruleAction(r, res)
+		if !fires || action <= best.Action {
+			continue
+		}
+		best = Outcome{
+			Decision:  agent.Decision{Action: action, Reason: r.Reason},
+			Judgment:  h.ID,
+			Value:     h.Value,
+			Condition: h.Condition,
 		}
 	}
 	return best
+}
+
+// Candidates returns every rule whose lexical filters (event, agent, tools,
+// paths, commands) match evt, ignoring When entirely.
+//
+// This is the first half of the two-phase evaluation: it determines which
+// judgments are worth asking about, so exactly one API request is made
+// carrying exactly the questions some candidate rule needs — and none at all
+// when no candidate has a When clause.
+func Candidates(cfg Config, evt Event) []Rule {
+	var out []Rule
+	for _, r := range cfg.Rules {
+		if ruleMatches(r, evt) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// ruleAction reports the action a lexically-matching rule contributes, and
+// whether it contributes one at all.
+func ruleAction(r Rule, res Result) (agent.Action, hit, bool) {
+	if len(r.When) == 0 {
+		return parseAction(r.Action), hit{}, true
+	}
+	ok, h, err := evalWhen(r.When, res.Answers)
+	switch {
+	case err != nil || res.Err != nil:
+		// Unevaluable: fall back to on-error. An omitted on-error is
+		// "allow", i.e. the rule does not fire.
+		onErr := parseAction(r.OnError)
+		return onErr, hit{}, onErr != agent.Allow
+	case !ok:
+		return agent.Allow, hit{}, false
+	default:
+		return parseAction(r.Action), h, true
+	}
 }
 
 func ruleMatches(r Rule, evt Event) bool {
